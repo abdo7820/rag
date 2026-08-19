@@ -15,9 +15,9 @@ The system combines **dense semantic retrieval**, **lexical retrieval**, **knowl
 
 ## 🏗️ System Architecture
 
-<p align="center">
-  <img src="architecture.png" alt="Liver Diseases RAG Production Architecture" width="100%">
-</p>
+<img width="1536" height="1024" alt="ChatGPT Image Aug 19, 2026, 07_52_28 PM" src="https://github.com/user-attachments/assets/e79ad3ec-6409-4352-84c6-3fa26a715c57" />
+
+
 
 ### End-to-End Flow
 
