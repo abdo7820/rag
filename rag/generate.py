@@ -1,44 +1,30 @@
 """
 rag/generate.py
 
-6-step grounded-answer chain for the Liver RAG system.
+6-step grounded-answer chain:
 
-Pipeline:
+1. Query rewrite
+2. Hybrid retrieval
+3. Neo4j graph retrieval
+4. Scope verification
+5. Grounded answer generation
+6. Answer verification
 
-    1. Guardrail
-    2. Query rewrite
-    3. Hybrid retrieval
-           Semantic
-              +
-           BM25
-              ↓
-             RRF
-              ↓
-        Jina Reranker API
-    4. Scope check
-    5. Draft answer
-    6. Verify + finalize
+Retrieval:
+    Semantic Search + BM25
+            ↓
+        RRF Fusion
+            ↓
+       Jina Reranker
 
-Production architecture:
+Generation:
+    Document Evidence = PRIMARY
+    Graph Evidence    = SUPPORTING
 
-    Railway
-       |
-       +-- Hugging Face Inference API
-       |       └── query embeddings
-       |
-       +-- Jina API
-       |       └── reranking
-       |
-       +-- Chroma + BM25
-       |
-       +-- Neo4j
-       |
-       └-- Groq
-
-IMPORTANT:
-This file does NOT load torch or local embedding/reranker models.
-Local model loading, when explicitly requested, is handled by
-rag/test_search.py.
+Railway:
+    USE_HF_INFERENCE_API=true
+    HF_API_TOKEN=...
+    JINA_API_KEY=...
 """
 
 import os
@@ -47,27 +33,20 @@ import re
 import sys
 import time
 
-
-# ==========================================================================
-# Environment
-# ==========================================================================
-
 from dotenv import load_dotenv
-
-load_dotenv()
+from groq import Groq
+from neo4j import GraphDatabase
 
 
 # ==========================================================================
-# Project path
+# Paths
 # ==========================================================================
 
-BASE_DIR = pathlib.Path(
-    __file__
-).resolve().parent.parent
-
-sys.path.insert(
-    0,
-    str(BASE_DIR / "rag"),
+BASE_DIR = (
+    pathlib.Path(__file__)
+    .resolve()
+    .parent
+    .parent
 )
 
 sys.path.insert(
@@ -75,17 +54,14 @@ sys.path.insert(
     str(BASE_DIR),
 )
 
-
-# ==========================================================================
-# Third-party imports
-# ==========================================================================
-
-from groq import Groq
-from neo4j import GraphDatabase
+sys.path.insert(
+    0,
+    str(BASE_DIR / "rag"),
+)
 
 
 # ==========================================================================
-# Retrieval imports
+# Retrieval
 # ==========================================================================
 
 from test_search import (
@@ -108,54 +84,6 @@ from config import (
     RETRIEVAL_TOP_K,
     GENERATION_MAX_RETRIES,
     GENERATION_RETRY_BACKOFF_S,
-    USE_HF_INFERENCE_API,
-    USE_JINA_RERANKER_API,
-    JINA_RERANKER_MODEL,
-)
-
-
-# ==========================================================================
-# Startup configuration
-# ==========================================================================
-
-print(
-    "\n"
-    + "=" * 70
-)
-
-print(
-    "Liver RAG generation pipeline"
-)
-
-print(
-    "=" * 70
-)
-
-print(
-    f"HF embedding API : "
-    f"{USE_HF_INFERENCE_API}"
-)
-
-print(
-    f"Jina reranker API: "
-    f"{USE_JINA_RERANKER_API}"
-)
-
-if USE_JINA_RERANKER_API:
-
-    print(
-        f"Jina model       : "
-        f"{JINA_RERANKER_MODEL}"
-    )
-
-print(
-    f"Generation model : "
-    f"{MODEL_NAME}"
-)
-
-print(
-    "=" * 70
-    + "\n"
 )
 
 
@@ -167,32 +95,22 @@ NOT_FOUND_TEXT = (
     "I don't know based on the available sources."
 )
 
-
 OUT_OF_SCOPE_TEXT = (
     "That's outside what this hepatology paper covers, "
     "so I can't answer it from these sources."
 )
 
-
 UNVERIFIED_TEXT = (
-    "I found some potentially relevant material, but I "
-    "couldn't confirm the answer was fully backed by a "
-    "citation I could verify, so I'm not showing it rather "
-    "than risk giving you an unsupported claim. Please try "
-    "rephrasing the question or asking again."
-)
-
-
-DISCLAIMER = (
-    "\n\n---\n"
-    "*This is educational information drawn from a research "
-    "paper, not medical advice. Please consult a qualified "
-    "healthcare professional for any personal medical decisions.*"
+    "I found some potentially relevant material, but I couldn't "
+    "confirm the answer was fully backed by a citation I could "
+    "verify, so I'm not showing it rather than risk giving you "
+    "an unsupported claim. Please try rephrasing the question "
+    "or asking again."
 )
 
 
 # ==========================================================================
-# Citation parser
+# Citation pattern
 # ==========================================================================
 
 CITATION_RE = re.compile(
@@ -202,28 +120,20 @@ CITATION_RE = re.compile(
 
 
 # ==========================================================================
-# Generation error
+# Generation exception
 # ==========================================================================
 
 class GenerationError(RuntimeError):
-    """
-    Raised when a required generation step fails after retries.
-
-    We never fall back to an unverified answer.
-    """
-
-    pass
+    """Raised when an LLM generation step fails."""
 
 
 # ==========================================================================
-# Step 1 — Guardrail
+# Medical guardrail
 # ==========================================================================
 
 BLOCKED_PATTERNS = re.compile(
     r"\b("
-    r"dosage|"
-    r"dose|"
-    r"prescri\w*|"
+    r"dosage|dose|prescri\w*|"
     r"should i take|"
     r"how much .*(should|do i) take|"
     r"is it safe for me|"
@@ -234,19 +144,16 @@ BLOCKED_PATTERNS = re.compile(
 )
 
 
-def is_blocked(
-    question: str,
-) -> bool:
-
-    return bool(
-        BLOCKED_PATTERNS.search(
-            question
-        )
-    )
+DISCLAIMER = (
+    "\n\n---\n"
+    "*This is educational information drawn from a research paper, "
+    "not medical advice. Please consult a qualified healthcare "
+    "professional for any personal medical decisions.*"
+)
 
 
 # ==========================================================================
-# Groq helper
+# Groq completion
 # ==========================================================================
 
 def _create_completion(
@@ -256,11 +163,8 @@ def _create_completion(
 
     try:
 
-        return (
-            client
-            .chat
-            .completions
-            .create(**kwargs)
+        return client.chat.completions.create(
+            **kwargs
         )
 
     except TypeError as exc:
@@ -293,6 +197,17 @@ def _create_completion(
         raise
 
 
+def is_blocked(
+    question: str,
+) -> bool:
+
+    return bool(
+        BLOCKED_PATTERNS.search(
+            question
+        )
+    )
+
+
 def _create_completion_with_retry(
     client: Groq,
     *,
@@ -309,11 +224,9 @@ def _create_completion_with_retry(
 
         try:
 
-            response = (
-                _create_completion(
-                    client,
-                    **kwargs,
-                )
+            response = _create_completion(
+                client,
+                **kwargs,
             )
 
             text = (
@@ -329,8 +242,8 @@ def _create_completion_with_retry(
                 return text
 
             last_error = RuntimeError(
-                f"{step_name}: "
-                "model returned an empty response"
+                f"{step_name}: model returned "
+                "an empty response"
             )
 
         except Exception as exc:
@@ -344,10 +257,7 @@ def _create_completion_with_retry(
                 f"failed: {exc!r}"
             )
 
-        if (
-            attempt
-            < GENERATION_MAX_RETRIES
-        ):
+        if attempt < GENERATION_MAX_RETRIES:
 
             time.sleep(
                 GENERATION_RETRY_BACKOFF_S
@@ -362,27 +272,26 @@ def _create_completion_with_retry(
 
 
 # ==========================================================================
-# Step 2 — Query rewrite
+# Step 1 — Query Rewrite
 # ==========================================================================
 
 REWRITE_PROMPT = """
-Rewrite the question below into a focused search query
-for retrieving passages from a hepatology (liver disease)
-research paper.
+Rewrite the question below into a focused search query for retrieving
+passages from a hepatology/liver disease research paper.
 
 Rules:
 
-- Expand medical abbreviations to their full form alongside
-  the abbreviation.
+- Expand medical abbreviations alongside the abbreviation.
+  Example:
+  HBV -> HBV hepatitis B virus
 
-- Add closely related medical synonyms if they would help
-  retrieval.
+- Add closely related medical synonyms when useful.
 
-- Keep it short.
+- Keep the query short.
 
-- Output a search query, not an answer.
+- Return ONLY the search query.
 
-- Do not add commentary.
+- Do not answer the question.
 
 Question:
 {question}
@@ -398,30 +307,20 @@ def rewrite_query(
 
     try:
 
-        response = (
-            client
-            .chat
-            .completions
-            .create(
-
-                model=MODEL_NAME,
-
-                messages=[
-                    {
-                        "role": "user",
-                        "content":
-                            REWRITE_PROMPT.format(
-                                question=question
-                            ),
-                    }
-                ],
-
-                temperature=0,
-
-                reasoning_effort="low",
-
-                max_completion_tokens=200,
-            )
+        response = _create_completion(
+            client,
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": REWRITE_PROMPT.format(
+                        question=question
+                    ),
+                }
+            ],
+            temperature=0,
+            reasoning_effort="low",
+            max_completion_tokens=200,
         )
 
         rewritten = (
@@ -441,15 +340,14 @@ def rewrite_query(
     except Exception as exc:
 
         print(
-            f"[WARN] Query rewrite failed: "
-            f"{exc}"
+            f"[DEBUG] Query rewrite failed: {exc!r}"
         )
 
         return question
 
 
 # ==========================================================================
-# Step 3 — Hybrid retrieval
+# Step 2 — Hybrid Retrieval
 # ==========================================================================
 
 def retrieve_chunks(
@@ -457,131 +355,30 @@ def retrieve_chunks(
     top_k: int = RETRIEVAL_TOP_K,
 ) -> list[dict]:
 
-    """
-    Hybrid retrieval:
-
-        Semantic
-           +
-         BM25
-           ↓
-          RRF
-           ↓
-       Reranking
-           ↓
-         Top K
-
-    The actual reranker backend is selected by config:
-
-        Production:
-            Jina API
-
-        Local:
-            CrossEncoder
-    """
-
-    print(
-        "\n=== RETRIEVAL ==="
-    )
-
-    # ----------------------------------------------------------------------
-    # Semantic
-    # ----------------------------------------------------------------------
-
     semantic_results = (
-        semantic_search(
-            query
-        )
+        semantic_search(query)
     )
-
-    print(
-        f"[RETRIEVAL] Semantic results: "
-        f"{len(semantic_results)}"
-    )
-
-
-    # ----------------------------------------------------------------------
-    # BM25
-    # ----------------------------------------------------------------------
 
     bm25_results = (
-        bm25_search(
-            query
-        )
+        bm25_search(query)
     )
 
-    print(
-        f"[RETRIEVAL] BM25 results: "
-        f"{len(bm25_results)}"
+    fused = reciprocal_rank_fusion(
+        semantic_results,
+        bm25_results,
     )
 
+    if not fused:
 
-    # ----------------------------------------------------------------------
-    # RRF
-    # ----------------------------------------------------------------------
+        return []
 
-    fused = (
-        reciprocal_rank_fusion(
-            semantic_results,
-            bm25_results,
-        )
+    reranked = rerank_results(
+        query,
+        fused,
     )
 
-    print(
-        f"[RETRIEVAL] RRF candidates: "
-        f"{len(fused)}"
-    )
+    return reranked[:top_k]
 
-
-    # ----------------------------------------------------------------------
-    # Reranking
-    # ----------------------------------------------------------------------
-
-    reranked = (
-        rerank_results(
-            query,
-            fused,
-        )
-    )
-
-    print(
-        f"[RETRIEVAL] Reranked results: "
-        f"{len(reranked)}"
-    )
-
-
-    # ----------------------------------------------------------------------
-    # Final top K
-    # ----------------------------------------------------------------------
-
-    final = reranked[
-        :top_k
-    ]
-
-
-    # ----------------------------------------------------------------------
-    # Debug ranking
-    # ----------------------------------------------------------------------
-
-    for index, chunk in enumerate(
-        final,
-        start=1,
-    ):
-
-        print(
-            f"[RETRIEVAL] #{index} "
-            f"chunk={chunk.get('chunk_id')} "
-            f"reranker="
-            f"{chunk.get('reranker_score', 0.0):.4f} "
-            f"rrf="
-            f"{chunk.get('rrf_score', 0.0):.6f}"
-        )
-
-    return final
-
-
-# ==========================================================================
-# Document context
-# ==========================================================================
 
 def build_chunk_context(
     chunks: list[dict],
@@ -589,48 +386,33 @@ def build_chunk_context(
 
     blocks = []
 
-    for c in chunks:
+    for chunk in chunks:
 
-        meta = (
-            c.get(
+        metadata = (
+            chunk.get(
                 "metadata",
                 {},
             )
             or {}
         )
 
-        section = (
-            meta.get(
-                "section"
-            )
-            or "Unknown"
+        section = metadata.get(
+            "section",
+            "Unknown",
         )
 
-        page = (
-            meta.get(
-                "page_start"
-            )
-
-            if meta.get(
-                "page_start"
-            )
-            not in (
-                None,
-                -1,
-            )
-
-            else "?"
+        page = metadata.get(
+            "page_start",
+            "?",
         )
 
         blocks.append(
             f"[Source: {section}, p.{page}]\n"
-            f"{c['text']}"
+            f"{chunk.get('text', '')}"
         )
 
-    return (
-        "\n\n".join(
-            blocks
-        )
+    return "\n\n".join(
+        blocks
     )
 
 
@@ -662,77 +444,45 @@ def get_neo4j_driver():
 
         return None
 
-
-    driver = GraphDatabase.driver(
-        uri,
-        auth=(
-            user,
-            password,
-        ),
-    )
-
+    driver = None
 
     try:
 
+        driver = GraphDatabase.driver(
+            uri,
+            auth=(
+                user,
+                password,
+            ),
+        )
+
         driver.verify_connectivity()
+
+        return driver
 
     except Exception as exc:
 
         print(
-            f"[WARN] Neo4j configured but "
-            f"unreachable: {exc}"
+            "[warn] Neo4j is configured "
+            f"but unreachable ({exc}). "
+            "Continuing without graph facts."
         )
 
-        print(
-            "[WARN] Continuing without graph facts."
-        )
+        if driver is not None:
 
-        driver.close()
+            try:
+                driver.close()
+            except Exception:
+                pass
 
         return None
 
 
-    return driver
-
-
 # ==========================================================================
-# Graph helpers
+# Graph entity cache
 # ==========================================================================
 
-def _dedupe_graph_facts(
-    facts: list[dict],
-) -> list[dict]:
-
-    seen = set()
-
-    deduped = []
-
-    for f in facts:
-
-        key = (
-            f.get("source"),
-            f.get("relation"),
-            f.get("target"),
-            f.get("section"),
-            f.get("page"),
-        )
-
-        if key in seen:
-
-            continue
-
-        seen.add(
-            key
-        )
-
-        deduped.append(
-            f
-        )
-
-    return deduped
-
-
-_all_entity_names: list[str] | None = None
+_all_entity_names = None
 
 
 def _get_all_entity_names(
@@ -742,27 +492,33 @@ def _get_all_entity_names(
 
     global _all_entity_names
 
-    if _all_entity_names is None:
+    if _all_entity_names is not None:
 
-        with driver.session(
-            database=database
-        ) as session:
+        return _all_entity_names
 
-            result = session.run(
-                """
-                MATCH (e:Entity)
-                WHERE size(e.name) > 2
-                RETURN DISTINCT e.name AS name
-                """
-            )
+    with driver.session(
+        database=database
+    ) as session:
 
-            _all_entity_names = [
-                record["name"]
-                for record in result
-            ]
+        result = session.run(
+            """
+            MATCH (e:Entity)
+            WHERE size(e.name) > 2
+            RETURN DISTINCT e.name AS name
+            """
+        )
+
+        _all_entity_names = [
+            record["name"]
+            for record in result
+        ]
 
     return _all_entity_names
 
+
+# ==========================================================================
+# Find entities mentioned in question
+# ==========================================================================
 
 def _find_mentioned_entities(
     question: str,
@@ -777,11 +533,13 @@ def _find_mentioned_entities(
 
     for name in all_names:
 
+        name_lower = (
+            str(name).lower()
+        )
+
         pattern = (
             r"\b"
-            + re.escape(
-                name.lower()
-            )
+            + re.escape(name_lower)
             + r"\b"
         )
 
@@ -797,6 +555,190 @@ def _find_mentioned_entities(
     return matched
 
 
+# ==========================================================================
+# Graph relevance
+# ==========================================================================
+
+def _graph_fact_relevance(
+    fact: dict,
+    question: str,
+) -> int:
+    """
+    Deterministic relevance score for Graph facts.
+
+    Higher score means stronger connection to the question.
+    """
+
+    question_lower = (
+        question.lower()
+    )
+
+    question_tokens = set(
+        re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            question_lower,
+        )
+    )
+
+    source = str(
+        fact.get(
+            "source",
+            "",
+        )
+    ).lower()
+
+    target = str(
+        fact.get(
+            "target",
+            "",
+        )
+    ).lower()
+
+    relation = str(
+        fact.get(
+            "relation",
+            "",
+        )
+    ).lower()
+
+    section = str(
+        fact.get(
+            "section",
+            "",
+        )
+    ).lower()
+
+    score = 0
+
+    # --------------------------------------------------------------
+    # Entity directly mentioned in question
+    # --------------------------------------------------------------
+
+    if source and re.search(
+        r"\b"
+        + re.escape(source)
+        + r"\b",
+        question_lower,
+    ):
+
+        score += 4
+
+    if target and re.search(
+        r"\b"
+        + re.escape(target)
+        + r"\b",
+        question_lower,
+    ):
+
+        score += 4
+
+    # --------------------------------------------------------------
+    # Relation overlap
+    # --------------------------------------------------------------
+
+    relation_tokens = set(
+        re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            relation,
+        )
+    )
+
+    overlap = (
+        question_tokens
+        & relation_tokens
+    )
+
+    if overlap:
+
+        score += 2
+
+    # --------------------------------------------------------------
+    # Useful section
+    # --------------------------------------------------------------
+
+    useful_section_words = {
+        "cause",
+        "causes",
+        "etiology",
+        "risk",
+        "cirrhosis",
+        "liver",
+        "disease",
+        "pathogenesis",
+        "chronic",
+    }
+
+    section_tokens = set(
+        re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            section,
+        )
+    )
+
+    if (
+        question_tokens
+        & section_tokens
+        & useful_section_words
+    ):
+
+        score += 1
+
+    # --------------------------------------------------------------
+    # Penalize generic reference sections
+    # --------------------------------------------------------------
+
+    if "reference" in section:
+
+        score -= 5
+
+    if section.strip() == "introduction":
+
+        score -= 2
+
+    return score
+
+
+# ==========================================================================
+# Deduplicate Graph facts
+# ==========================================================================
+
+def _dedupe_graph_facts(
+    facts: list[dict],
+) -> list[dict]:
+
+    seen = set()
+
+    deduped = []
+
+    for fact in facts:
+
+        key = (
+            fact.get("source"),
+            fact.get("relation"),
+            fact.get("target"),
+            fact.get("section"),
+            fact.get("page"),
+        )
+
+        if key in seen:
+
+            continue
+
+        seen.add(
+            key
+        )
+
+        deduped.append(
+            fact
+        )
+
+    return deduped
+
+
+# ==========================================================================
+# Graph retrieval
+# ==========================================================================
+
 def retrieve_graph_facts(
     driver,
     original_question: str,
@@ -807,12 +749,10 @@ def retrieve_graph_facts(
 
         return []
 
-
     database = os.getenv(
         "NEO4J_DATABASE",
         "neo4j",
     )
-
 
     try:
 
@@ -830,63 +770,85 @@ def retrieve_graph_facts(
             )
         )
 
-
         if not names:
 
             return []
-
 
         with driver.session(
             database=database
         ) as session:
 
             result = session.run(
-
                 """
-                MATCH
-                    (a:Entity)-[r:RELATION]->(b:Entity)
-
-                WHERE
-                    a.name IN $names
-                    OR
-                    b.name IN $names
-
+                MATCH (a:Entity)-[r:RELATION]->(b:Entity)
+                WHERE a.name IN $names
+                   OR b.name IN $names
                 RETURN
                     a.name AS source,
                     r.relation AS relation,
                     b.name AS target,
                     r.section AS section,
                     r.page_start AS page
-
-                LIMIT $limit
+                LIMIT 50
                 """,
-
                 names=names,
-
-                limit=limit,
             )
-
 
             facts = [
                 dict(record)
                 for record in result
             ]
 
+        facts = _dedupe_graph_facts(
+            facts
+        )
 
-            return _dedupe_graph_facts(
-                facts
+        scored = []
+
+        for fact in facts:
+
+            relevance = (
+                _graph_fact_relevance(
+                    fact,
+                    original_question,
+                )
             )
 
+            scored.append(
+                (
+                    relevance,
+                    fact,
+                )
+            )
+
+        scored.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        # Only keep actually relevant facts.
+        relevant = [
+            fact
+            for score, fact in scored
+            if score > 0
+        ]
+
+        return relevant[:limit]
 
     except Exception as exc:
 
         print(
-            f"[WARN] Neo4j query failed: "
-            f"{exc}"
+            "[warn] Neo4j query failed: "
+            f"{exc}. "
+            "Continuing without graph facts."
         )
 
         return []
 
+
+# ==========================================================================
+# Graph context
+# ==========================================================================
 
 def build_graph_context(
     facts: list[dict],
@@ -896,36 +858,39 @@ def build_graph_context(
 
         return ""
 
-
     lines = []
 
-
-    for f in facts:
+    for fact in facts:
 
         section = (
-            f.get("section")
+            fact.get(
+                "section"
+            )
             or "Unknown"
         )
 
         page = (
-            f.get("page")
+            fact.get(
+                "page"
+            )
             or "?"
         )
 
-
         lines.append(
-            "[Graph source: "
-            f"{section}, p.{page}] "
-            f"{f['source']} "
-            f"-[{f['relation']}]-> "
-            f"{f['target']}"
+            f"[Graph source: {section}, p.{page}] "
+            f"{fact.get('source', 'Unknown')} "
+            f"-[{fact.get('relation', 'RELATED_TO')}]-> "
+            f"{fact.get('target', 'Unknown')}"
         )
-
 
     return "\n".join(
         lines
     )
 
+
+# ==========================================================================
+# Full context
+# ==========================================================================
 
 def build_full_context(
     chunks: list[dict],
@@ -934,28 +899,24 @@ def build_full_context(
 
     parts = []
 
-
-    chunk_context = (
+    document_context = (
         build_chunk_context(
             chunks
         )
     )
 
-
-    if chunk_context:
+    if document_context:
 
         parts.append(
             "### DOCUMENT EXCERPTS\n\n"
-            + chunk_context
+            + document_context
         )
-
 
     graph_context = (
         build_graph_context(
             graph_facts
         )
     )
-
 
     if graph_context:
 
@@ -964,30 +925,31 @@ def build_full_context(
             + graph_context
         )
 
+    if not parts:
 
-    return (
-        "\n\n".join(parts)
-        if parts
-        else "(no evidence retrieved)"
+        return "(no evidence retrieved)"
+
+    return "\n\n".join(
+        parts
     )
 
 
 # ==========================================================================
-# Step 4 — Scope check
+# Step 3 — Scope
 # ==========================================================================
 
 SCOPE_PROMPT = """
-You will be shown a QUESTION and EVIDENCE excerpts
-retrieved from a hepatology research paper.
+You will be shown a QUESTION and EVIDENCE retrieved from a
+hepatology/liver disease research paper.
 
-Think briefly about whether:
+Determine whether:
 
-1. The question is related to hepatology/liver disease.
-2. The evidence is at least topically related.
+1. The question is related to liver disease/hepatology.
+2. The retrieved evidence is at least topically related.
 
-The evidence does NOT need to completely answer the question.
+The evidence does NOT need to fully answer the question.
 
-Respond exactly:
+Respond in exactly two lines:
 
 Reasoning: <one short sentence>
 Verdict: YES or NO
@@ -1008,31 +970,22 @@ def classify_scope(
 
     try:
 
-        response = (
-            _create_completion(
-                client,
-
-                model=MODEL_NAME,
-
-                messages=[
-                    {
-                        "role": "user",
-                        "content":
-                            SCOPE_PROMPT.format(
-                                question=question,
-                                context=context,
-                            ),
-                    }
-                ],
-
-                temperature=0,
-
-                reasoning_effort="low",
-
-                max_completion_tokens=150,
-            )
+        response = _create_completion(
+            client,
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": SCOPE_PROMPT.format(
+                        question=question,
+                        context=context,
+                    ),
+                }
+            ],
+            temperature=0,
+            reasoning_effort="low",
+            max_completion_tokens=150,
         )
-
 
         text = (
             response
@@ -1041,7 +994,6 @@ def classify_scope(
             .content
             or ""
         ).strip().upper()
-
 
         verdict_line = next(
             (
@@ -1052,18 +1004,16 @@ def classify_scope(
             text,
         )
 
-
         return (
             "YES"
             in verdict_line
         )
 
-
     except Exception as exc:
 
         print(
-            f"[WARN] Scope check failed: "
-            f"{exc}"
+            f"[DEBUG] Scope classification failed: "
+            f"{exc!r}"
         )
 
         return True
@@ -1081,11 +1031,9 @@ def is_in_scope(
         < SCOPE_CONFIDENCE_FLOOR
     )
 
-
     if not retrieval_is_weak:
 
         return True
-
 
     llm_says_in_scope = (
         classify_scope(
@@ -1095,7 +1043,6 @@ def is_in_scope(
         )
     )
 
-
     return not (
         not llm_says_in_scope
         and retrieval_is_weak
@@ -1103,64 +1050,124 @@ def is_in_scope(
 
 
 # ==========================================================================
-# Step 5 — Draft answer
+# Step 4 — Draft
 # ==========================================================================
 
 DRAFT_PROMPT = """
-You are a hepatology research assistant answering
-questions strictly from the material provided below.
+You are a hepatology research assistant answering questions STRICTLY
+from the evidence provided below.
 
-Evidence types:
+There are TWO evidence types:
 
 1. DOCUMENT EXCERPTS
-   Passages retrieved from the research paper.
+   Direct passages retrieved from the original research paper.
 
 2. KNOWLEDGE GRAPH FACTS
-   Entity relationships extracted from the same paper.
+   Relationships extracted from the same research paper.
 
-Rules:
+============================================================
+EVIDENCE PRIORITY
+============================================================
 
-1. Read ALL evidence before answering.
+Use evidence in this priority order:
 
-2. Only state information directly supported by evidence.
+1. DOCUMENT EXCERPTS = PRIMARY EVIDENCE
+2. KNOWLEDGE GRAPH FACTS = SUPPORTING EVIDENCE
 
-3. Never use outside knowledge.
+If a DOCUMENT EXCERPT directly answers the question, it MUST be the
+primary basis of the answer.
 
-4. After every factual claim, add a citation using EXACTLY:
+Use GRAPH FACTS only to:
+
+- support a claim already supported by the document, OR
+- add a directly relevant relationship that is not explicitly stated
+  in the retrieved document.
+
+Never allow a graph fact to replace strong document evidence.
+
+============================================================
+ANSWER COMPLETENESS
+============================================================
+
+When the document evidence explicitly lists multiple major causes,
+risk factors, mechanisms, or categories relevant to the question,
+include ALL directly supported major items.
+
+For example, if the evidence explicitly identifies:
+
+- MASLD
+- HBV
+- HCV
+- ALD
+
+as causes of cirrhosis, do NOT answer with only HBV and HCV.
+
+Do not omit an important directly supported item simply because a graph
+fact mentions another cause.
+
+============================================================
+GROUNDING RULES
+============================================================
+
+1. Use ONLY information explicitly supported by the evidence.
+
+2. Never use outside medical knowledge.
+
+3. Every factual claim must have a citation.
+
+4. Document citation format:
 
    [Source: <section>, p.<page>]
 
-   or
+5. Graph citation format:
 
    [Graph source: <section>, p.<page>]
 
-5. Never invent citations.
+6. Never fabricate citations.
 
-6. Never invent page numbers.
+7. Never cite a graph fact merely because an entity appears in the
+   question.
 
-7. If evidence only partially answers the question,
-   answer only the supported part.
+8. A graph citation is valid only when the specific relationship
+   directly supports the claim.
 
-8. If evidence does not answer the question, output
-   exactly:
+9. Prefer ONE strong document citation when one document excerpt
+   supports several related claims.
 
-   {not_found}
+10. Avoid unnecessary graph citations when the document already
+    provides sufficient evidence.
 
-9. Prefer both document evidence and graph evidence
-   when both are relevant.
+11. Do not cite INTRODUCTION or REFERENCES merely because they contain
+    an entity.
 
-10. Be concise.
+12. If the evidence only partially answers the question, answer only
+    the supported portion.
 
-11. Do not add medical disclaimers.
-    The system adds them separately.
+13. If the evidence does not contain the answer, output EXACTLY:
 
-EVIDENCE:
+I don't know based on the available sources.
+
+14. Be concise but complete.
+
+15. Do not add medical disclaimers.
+    The application adds them separately.
+
+============================================================
+QUESTION
+============================================================
+
+{question}
+
+============================================================
+EVIDENCE
+============================================================
 
 {context}
-""".replace(
-    "{not_found}",
-    NOT_FOUND_TEXT,
-)
+
+============================================================
+FINAL ANSWER
+============================================================
+"""
 
 
 def draft_answer(
@@ -1169,123 +1176,208 @@ def draft_answer(
     context: str,
 ) -> str:
 
-    system_prompt = (
-        DRAFT_PROMPT.format(
-            context=context
-        )
+    prompt = DRAFT_PROMPT.format(
+        question=query,
+        context=context,
     )
 
-
-    return (
-        _create_completion_with_retry(
-            client,
-
-            step_name="draft_answer",
-
-            model=MODEL_NAME,
-
-            messages=[
-                {
-                    "role": "system",
-                    "content":
-                        system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content":
-                        query,
-                },
-            ],
-
-            temperature=0,
-
-            reasoning_effort="low",
-
-            max_completion_tokens=2000,
-        )
+    return _create_completion_with_retry(
+        client,
+        step_name="draft_answer",
+        model=MODEL_NAME,
+        messages=[
+            {
+                "role": "system",
+                "content": prompt,
+            },
+            {
+                "role": "user",
+                "content": query,
+            },
+        ],
+        temperature=0,
+        reasoning_effort="low",
+        max_completion_tokens=2000,
     )
 
 
 # ==========================================================================
-# Step 6 — Verify
+# Step 5 — Verification
 # ==========================================================================
 
 VERIFY_PROMPT = """
-You are a strict fact-checker.
+You are a strict fact-checker for a hepatology research QA system.
 
-QUESTION:
+You are given:
+
+1. QUESTION
+2. DOCUMENT EXCERPTS
+3. KNOWLEDGE GRAPH FACTS
+4. DRAFT ANSWER
+
+Your job is to produce the FINAL grounded answer.
+
+============================================================
+EVIDENCE PRIORITY
+============================================================
+
+DOCUMENT EXCERPTS are PRIMARY evidence.
+
+KNOWLEDGE GRAPH FACTS are SECONDARY supporting evidence.
+
+If the document directly supports a claim, keep the document evidence
+as the primary citation.
+
+Do NOT replace strong document evidence with a graph citation.
+
+============================================================
+COMPLETENESS CHECK
+============================================================
+
+Before producing the final answer, check whether the DOCUMENT EXCERPTS
+explicitly list multiple causes, risk factors, mechanisms, or categories.
+
+If several major items are directly supported and relevant to the
+question, retain ALL of them.
+
+For example, if the evidence explicitly supports:
+
+- MASLD
+- HBV
+- HCV
+- ALD
+
+then the final answer should mention all four when answering a question
+about causes of cirrhosis.
+
+Do not accidentally reduce a multi-item answer to only the entities
+that happen to appear in the graph.
+
+============================================================
+CITATION RULES
+============================================================
+
+1. Every factual claim must be supported by the evidence.
+
+2. Document citation:
+
+   [Source: <section>, p.<page>]
+
+3. Graph citation:
+
+   [Graph source: <section>, p.<page>]
+
+4. Every citation must correspond to actual evidence provided.
+
+5. Remove fabricated citations.
+
+6. Remove graph citations that do not directly support the claim.
+
+7. Do not cite INTRODUCTION or REFERENCES merely because an entity
+   appears there.
+
+8. If a document excerpt directly supports a claim, prefer its citation.
+
+9. A graph relationship should only remain if it materially supports
+   the exact claim.
+
+10. Do not add outside medical knowledge.
+
+============================================================
+STYLE
+============================================================
+
+- Answer the question directly.
+- Keep the answer concise.
+- Preserve important directly supported details.
+- Do not add unsupported explanations.
+- Do not add medical advice.
+- Do not mention this verification process.
+
+If the draft is fully supported, return the corrected final answer.
+
+If unsupported material exists, remove or correct only that material.
+
+If nothing remains supported, output exactly:
+
+I don't know based on the available sources.
+
+============================================================
+QUESTION
+============================================================
+
 {question}
 
-EVIDENCE:
-{context}
+============================================================
+DOCUMENT EXCERPTS
+============================================================
 
-DRAFT ANSWER:
+{document_context}
+
+============================================================
+KNOWLEDGE GRAPH FACTS
+============================================================
+
+{graph_context}
+
+============================================================
+DRAFT ANSWER
+============================================================
+
 {draft}
 
-Check the draft claim by claim.
-
-Rules:
-
-- Every factual claim must be supported by the evidence.
-
-- Every citation must reference evidence that actually
-  appears above.
-
-- Every citation must contain both section and page.
-
-- Correct unsupported claims.
-
-- Remove unsupported claims.
-
-- Keep valid claims and citations.
-
-- If nothing remains supported, output exactly:
-
-  {not_found}
-
-- Output ONLY the final answer.
-
-- Do not explain what you changed.
-""".replace(
-    "{not_found}",
-    NOT_FOUND_TEXT,
-)
+============================================================
+FINAL ANSWER
+============================================================
+"""
 
 
 def verify_answer(
     client: Groq,
     query: str,
-    context: str,
+    chunks: list[dict],
+    graph_facts: list[dict],
     draft: str,
 ) -> str:
 
-    return (
-        _create_completion_with_retry(
-
-            client,
-
-            step_name="verify_answer",
-
-            model=MODEL_NAME,
-
-            messages=[
-                {
-                    "role": "user",
-                    "content":
-                        VERIFY_PROMPT.format(
-                            question=query,
-                            context=context,
-                            draft=draft,
-                        ),
-                }
-            ],
-
-            temperature=0,
-
-            reasoning_effort="low",
-
-            max_completion_tokens=2500,
+    document_context = (
+        build_chunk_context(
+            chunks
         )
+    )
+
+    graph_context = (
+        build_graph_context(
+            graph_facts
+        )
+    )
+
+    prompt = VERIFY_PROMPT.format(
+        question=query,
+        document_context=(
+            document_context
+            or "(none)"
+        ),
+        graph_context=(
+            graph_context
+            or "(none)"
+        ),
+        draft=draft,
+    )
+
+    return _create_completion_with_retry(
+        client,
+        step_name="verify_answer",
+        model=MODEL_NAME,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        temperature=0,
+        reasoning_effort="low",
+        max_completion_tokens=2500,
     )
 
 
@@ -1303,7 +1395,6 @@ def _extract_citations(
             section.strip(),
             page.strip(),
         )
-
         for kind, section, page
         in CITATION_RE.findall(
             text
@@ -1318,33 +1409,29 @@ def _valid_citation_keys(
 
     valid = set()
 
+    for chunk in chunks:
 
-    for c in chunks:
-
-        meta = (
-            c.get(
+        metadata = (
+            chunk.get(
                 "metadata",
                 {},
             )
             or {}
         )
 
-
         section = str(
-            meta.get(
+            metadata.get(
                 "section",
                 "Unknown",
             )
         ).strip()
 
-
         page = str(
-            meta.get(
+            metadata.get(
                 "page_start",
                 "?",
             )
         ).strip()
-
 
         valid.add(
             (
@@ -1354,24 +1441,21 @@ def _valid_citation_keys(
             )
         )
 
-
-    for f in graph_facts:
+    for fact in graph_facts:
 
         section = str(
-            f.get(
+            fact.get(
                 "section"
             )
             or "Unknown"
         ).strip()
 
-
         page = str(
-            f.get(
+            fact.get(
                 "page"
             )
             or "?"
         ).strip()
-
 
         valid.add(
             (
@@ -1380,7 +1464,6 @@ def _valid_citation_keys(
                 page,
             )
         )
-
 
     return valid
 
@@ -1397,11 +1480,9 @@ def has_only_verifiable_citations(
         )
     )
 
-
     if not citations:
 
         return True
-
 
     valid_keys = (
         _valid_citation_keys(
@@ -1410,7 +1491,6 @@ def has_only_verifiable_citations(
         )
     )
 
-
     return all(
         citation in valid_keys
         for citation in citations
@@ -1418,29 +1498,95 @@ def has_only_verifiable_citations(
 
 
 # ==========================================================================
-# Finalize
+# Confidence
 # ==========================================================================
+
+def _get_retrieval_confidence(
+    chunks: list[dict],
+) -> float:
+    """
+    Convert raw Jina reranker scores into a coarse confidence signal.
+
+    Jina scores are ranking scores, not calibrated probabilities.
+    Therefore they should not be interpreted directly as probability.
+    """
+
+    if not chunks:
+
+        return 0.0
+
+    scores = []
+
+    for chunk in chunks:
+
+        score = chunk.get(
+            "reranker_score"
+        )
+
+        if score is None:
+
+            continue
+
+        try:
+
+            scores.append(
+                float(score)
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+    if not scores:
+
+        return 0.0
+
+    top_score = max(
+        scores
+    )
+
+    if top_score >= 0.60:
+
+        return 1.0
+
+    if top_score >= 0.40:
+
+        return 0.75
+
+    if top_score >= 0.25:
+
+        return 0.50
+
+    return 0.0
+
 
 def finalize_answer(
     answer: str,
-    top_reranker_score: float,
+    chunks: list[dict],
 ) -> str:
+
+    confidence = (
+        _get_retrieval_confidence(
+            chunks
+        )
+    )
 
     confidence_note = ""
 
-
     if (
-        top_reranker_score
+        confidence
         < LOW_CONFIDENCE_THRESHOLD
+        and chunks
     ):
 
         confidence_note = (
-            "\n\n⚠️ "
-            "*Low confidence retrieval — "
-            "the closest match found wasn't "
-            "a strong fit for this question.*"
+            "\n\n⚠️ *Low confidence retrieval — "
+            "the available evidence may not be a strong "
+            "fit for this question.*"
         )
-
 
     return (
         answer
@@ -1450,7 +1596,7 @@ def finalize_answer(
 
 
 # ==========================================================================
-# Main chain
+# Main answer chain
 # ==========================================================================
 
 def answer_question(
@@ -1461,37 +1607,29 @@ def answer_question(
 ) -> str:
 
     # ----------------------------------------------------------------------
-    # Step 1
+    # Medical guardrail
     # ----------------------------------------------------------------------
 
-    if is_blocked(
-        query
-    ):
+    if is_blocked(query):
 
         return (
             "I can't give personal medical advice "
-            "(dosage, prescriptions, or diagnosis) "
-            "— please talk to a doctor or pharmacist "
-            "about that. I can share what the research "
-            "paper says about liver disease topics in "
-            "general, if that helps."
+            "(dosage, prescriptions, or diagnosis). "
+            "I can share what the research paper says "
+            "about liver disease topics in general."
         )
-
 
     t_start = time.time()
 
-
     # ----------------------------------------------------------------------
-    # Step 2 — Rewrite
+    # Step 1 — Rewrite
     # ----------------------------------------------------------------------
 
     t0 = time.time()
 
-    search_query = (
-        rewrite_query(
-            client,
-            query,
-        )
+    search_query = rewrite_query(
+        client,
+        query,
     )
 
     print(
@@ -1500,25 +1638,19 @@ def answer_question(
     )
 
     print(
-        f"[QUERY] Original : {query}"
+        f"[DEBUG] Search query: "
+        f"{search_query}"
     )
-
-    print(
-        f"[QUERY] Rewritten: {search_query}"
-    )
-
 
     # ----------------------------------------------------------------------
-    # Step 3 — Retrieval
+    # Step 2 — Hybrid retrieval + Reranking
     # ----------------------------------------------------------------------
 
     t0 = time.time()
 
-    chunks = (
-        retrieve_chunks(
-            search_query,
-            top_k=top_k,
-        )
+    chunks = retrieve_chunks(
+        search_query,
+        top_k=top_k,
     )
 
     print(
@@ -1527,9 +1659,8 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-
     # ----------------------------------------------------------------------
-    # Graph
+    # Step 3 — Graph retrieval
     # ----------------------------------------------------------------------
 
     t0 = time.time()
@@ -1538,6 +1669,7 @@ def answer_question(
         retrieve_graph_facts(
             driver,
             query,
+            limit=GRAPH_FACTS_LIMIT,
         )
     )
 
@@ -1546,11 +1678,9 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-
     print(
         "\n=== Graph facts ==="
     )
-
 
     if not graph_facts:
 
@@ -1560,82 +1690,80 @@ def answer_question(
 
     else:
 
-        for f in graph_facts:
+        for fact in graph_facts:
 
             section = (
-                f.get(
+                fact.get(
                     "section"
                 )
                 or "Unknown"
             )
 
             page = (
-                f.get(
+                fact.get(
                     "page"
                 )
                 or "?"
             )
 
             print(
-                f"{f['source']} "
-                f"-[{f['relation']}]-> "
-                f"{f['target']} "
-                f"(section={section}, "
-                f"p.{page})"
+                f"{fact.get('source')} "
+                f"-[{fact.get('relation')}]-> "
+                f"{fact.get('target')} "
+                f"(section={section}, p.{page})"
             )
-
 
     # ----------------------------------------------------------------------
     # No evidence
     # ----------------------------------------------------------------------
 
-    if (
-        not chunks
-        and not graph_facts
-    ):
+    if not chunks and not graph_facts:
 
         return (
             NOT_FOUND_TEXT
             + DISCLAIMER
         )
 
-
     # ----------------------------------------------------------------------
-    # Context
+    # Build context
     # ----------------------------------------------------------------------
 
-    context = (
-        build_full_context(
-            chunks,
-            graph_facts,
-        )
+    context = build_full_context(
+        chunks,
+        graph_facts,
     )
-
 
     # ----------------------------------------------------------------------
     # Confidence
     # ----------------------------------------------------------------------
 
-    if chunks:
-
-        top_reranker_score = float(
-            chunks[0].get(
-                "reranker_score",
-                0.0,
-            )
+    retrieval_confidence = (
+        _get_retrieval_confidence(
+            chunks
         )
-
-    else:
-
-        top_reranker_score = 0.0
-
-
-    print(
-        f"[CONFIDENCE] "
-        f"top reranker score: "
-        f"{top_reranker_score:.4f}"
     )
 
+    print(
+        f"[DEBUG] Retrieval confidence: "
+        f"{retrieval_confidence:.2f}"
+    )
+
+    scores = [
+        chunk.get(
+            "reranker_score"
+        )
+        for chunk in chunks
+        if chunk.get(
+            "reranker_score"
+        ) is not None
+    ]
+
+    if scores:
+
+        print(
+            "[DEBUG] Jina scores: "
+            f"{[round(float(s), 4) for s in scores]}"
+        )
 
     # ----------------------------------------------------------------------
     # Step 4 — Scope
@@ -1643,13 +1771,22 @@ def answer_question(
 
     t0 = time.time()
 
-    in_scope = (
-        is_in_scope(
-            client,
-            query,
-            context,
-            top_reranker_score,
+    top_reranker_score = (
+        float(
+            chunks[0].get(
+                "reranker_score",
+                1.0,
+            )
         )
+        if chunks
+        else 0.0
+    )
+
+    in_scope = is_in_scope(
+        client,
+        query,
+        context,
+        top_reranker_score,
     )
 
     print(
@@ -1657,14 +1794,12 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-
     if not in_scope:
 
         return (
             OUT_OF_SCOPE_TEXT
             + DISCLAIMER
         )
-
 
     # ----------------------------------------------------------------------
     # Step 5 — Draft
@@ -1674,12 +1809,10 @@ def answer_question(
 
         t0 = time.time()
 
-        draft = (
-            draft_answer(
-                client,
-                query,
-                context,
-            )
+        draft = draft_answer(
+            client,
+            query,
+            context,
         )
 
         print(
@@ -1687,27 +1820,24 @@ def answer_question(
             f"{time.time() - t0:.2f}s"
         )
 
-
         # --------------------------------------------------------------
-        # Step 6 — Verify
+        # Step 6 — Verification
         # --------------------------------------------------------------
 
         t0 = time.time()
 
-        verified = (
-            verify_answer(
-                client,
-                query,
-                context,
-                draft,
-            )
+        verified = verify_answer(
+            client,
+            query,
+            chunks,
+            graph_facts,
+            draft,
         )
 
         print(
             f"[TIMING] verify_answer: "
             f"{time.time() - t0:.2f}s"
         )
-
 
     except GenerationError as exc:
 
@@ -1721,7 +1851,6 @@ def answer_question(
             + DISCLAIMER
         )
 
-
     # ----------------------------------------------------------------------
     # Citation validation
     # ----------------------------------------------------------------------
@@ -1733,19 +1862,27 @@ def answer_question(
     ):
 
         print(
-            "[DEBUG] Citation check failed."
+            "[DEBUG] Citation validation failed."
         )
 
         print(
-            f"--- draft ---\n{draft}"
+            "--- DRAFT ---"
         )
 
         print(
-            f"--- verified ---\n{verified}"
+            draft
         )
 
         print(
-            "--- valid keys ---"
+            "--- VERIFIED ---"
+        )
+
+        print(
+            verified
+        )
+
+        print(
+            "--- VALID CITATIONS ---"
         )
 
         print(
@@ -1756,7 +1893,7 @@ def answer_question(
         )
 
         print(
-            "--- citations found ---"
+            "--- FOUND CITATIONS ---"
         )
 
         print(
@@ -1765,33 +1902,24 @@ def answer_question(
             )
         )
 
-
         return (
             UNVERIFIED_TEXT
             + DISCLAIMER
         )
 
-
     # ----------------------------------------------------------------------
-    # Final
+    # Final answer
     # ----------------------------------------------------------------------
-
-    total_time = (
-        time.time()
-        - t_start
-    )
-
 
     print(
         f"[TIMING] TOTAL "
         f"(answer_question): "
-        f"{total_time:.2f}s"
+        f"{time.time() - t_start:.2f}s"
     )
-
 
     return finalize_answer(
         verified,
-        top_reranker_score,
+        chunks,
     )
 
 
@@ -1805,14 +1933,11 @@ def main():
         time.time()
     )
 
-
     load_dotenv()
-
 
     api_key = os.getenv(
         "GROQ_API_KEY"
     )
-
 
     if not api_key:
 
@@ -1821,35 +1946,22 @@ def main():
             "Add it to your .env file."
         )
 
-
-    api_key = api_key.strip()
-
-
     query = (
-        " ".join(
-            sys.argv[1:]
-        )
-
-        or
-
-        "What causes liver cirrhosis?"
+        " ".join(sys.argv[1:])
+        or "What causes liver cirrhosis?"
     )
-
 
     print(
         f"Query: {query}\n"
     )
 
-
     client = Groq(
         api_key=api_key
     )
 
-
     driver = (
         get_neo4j_driver()
     )
-
 
     if driver is None:
 
@@ -1858,30 +1970,28 @@ def main():
             "answering from vector/BM25 only.)\n"
         )
 
-
     try:
 
-        answer = (
-            answer_question(
-                client,
-                driver,
-                query,
-            )
+        answer = answer_question(
+            client,
+            driver,
+            query,
         )
-
 
     finally:
 
         if driver is not None:
 
-            driver.close()
-
+            try:
+                driver.close()
+            except Exception:
+                pass
 
     print(
-        f"[TIMING] TOTAL whole process: "
+        f"[TIMING] TOTAL "
+        f"(whole process, incl. imports): "
         f"{time.time() - t_process_start:.2f}s"
     )
-
 
     print(
         "=" * 70
@@ -1899,10 +2009,6 @@ def main():
         answer
     )
 
-
-# ==========================================================================
-# Entry point
-# ==========================================================================
 
 if __name__ == "__main__":
 
