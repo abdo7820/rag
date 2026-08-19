@@ -1385,33 +1385,61 @@ def verify_answer(
 # Citation validation
 # ==========================================================================
 
+def _extract_citations(
+    text: str,
+) -> list[tuple[str, str, str]]:
+
+    return [
+        (
+            kind.strip(),
+            section.strip(),
+            page.strip(),
+        )
+        for kind, section, page
+        in CITATION_RE.findall(
+            text
+        )
+    ]
+
+
 def _normalize_citation_key(
     kind: str,
     section: str,
     page: str,
 ) -> tuple[str, str, str]:
     """
-    Normalize a citation key so trivial formatting differences
-    (case, extra whitespace, "p.5" vs "p. 5", "5-6" vs "5–6")
-    don't cause a valid citation to be rejected.
+    Normalize a citation key so that harmless differences in how the
+    LLM re-types a section name or page number (case, leading numbering
+    like "1. ", extra whitespace, stray punctuation) don't cause a
+    valid, well-grounded citation to be rejected.
     """
 
     kind_norm = (
         kind.strip().lower()
     )
 
+    section_norm = section.strip().lower()
+
+    # Strip leading numbering like "1. ", "2) ", "3 - " etc.
+    section_norm = re.sub(
+        r"^\d+[\.\)\-]\s*",
+        "",
+        section_norm,
+    )
+
+    # Collapse internal whitespace.
     section_norm = re.sub(
         r"\s+",
         " ",
-        section.strip().lower(),
-    )
+        section_norm,
+    ).strip()
 
-    page_norm = (
-        page.strip()
-        .lower()
-        .replace("–", "-")
-        .replace("—", "-")
-        .replace(" ", "")
+    # Keep only alphanumerics/hyphens for page comparison
+    # (handles "p.12", "12 ", "12-13", etc. consistently).
+    page_norm = re.sub(
+        r"[^\w\-]",
+        "",
+        page.strip().lower(),
     )
 
     return (
@@ -1419,23 +1447,6 @@ def _normalize_citation_key(
         section_norm,
         page_norm,
     )
-
-
-def _extract_citations(
-    text: str,
-) -> list[tuple[str, str, str]]:
-
-    return [
-        _normalize_citation_key(
-            kind,
-            section,
-            page,
-        )
-        for kind, section, page
-        in CITATION_RE.findall(
-            text
-        )
-    ]
 
 
 def _valid_citation_keys(
@@ -1528,7 +1539,8 @@ def has_only_verifiable_citations(
     )
 
     return all(
-        citation in valid_keys
+        _normalize_citation_key(*citation)
+        in valid_keys
         for citation in citations
     )
 
@@ -1918,7 +1930,7 @@ def answer_question(
         )
 
         print(
-            "--- VALID CITATIONS ---"
+            "--- VALID CITATIONS (normalized) ---"
         )
 
         print(
@@ -1929,13 +1941,24 @@ def answer_question(
         )
 
         print(
-            "--- FOUND CITATIONS ---"
+            "--- FOUND CITATIONS (raw) ---"
         )
 
         print(
             _extract_citations(
                 verified
             )
+        )
+
+        print(
+            "--- FOUND CITATIONS (normalized) ---"
+        )
+
+        print(
+            [
+                _normalize_citation_key(*c)
+                for c in _extract_citations(verified)
+            ]
         )
 
         return (
