@@ -181,8 +181,13 @@ Rules:
   HBV -> HBV hepatitis B virus
 
 - Add closely related medical synonyms when useful.
-
-- Keep the query short.
+- Preserve the user's intent (cause, prevalence, diagnosis, treatment,
+  mechanism, risk factor, etc.).
+- For cause/risk-factor questions about cirrhosis, include useful retrieval
+  terms such as "cirrhosis etiology", "chronic liver injury", and relevant
+  liver-disease terminology when appropriate.
+- Do not turn the rewrite into an answer.
+- Keep the query focused and reasonably short.
 
 - Return ONLY the search query.
 
@@ -499,6 +504,9 @@ ANSWER QUALITY:
 - Answer the exact question directly.
 - Use concise bullets when appropriate.
 - Do not mention retrieval, confidence scores, internal reasoning, or the graph.
+- If the evidence contains multiple directly relevant pieces,
+  synthesize them into one concise answer and cite each claim.
+- Do not require one passage to contain the entire answer.
 - If the evidence does not adequately support the answer, reply exactly:
   I don't know based on the available sources.
 
@@ -626,7 +634,9 @@ def finalize_answer(
     """
     confidence_note = ""
 
-    if not chunks or not _has_substantive_citation(answer):
+    # Only show the warning when there is genuinely no cited evidence.
+    # Do NOT use the raw reranker score as a confidence probability.
+    if not _has_substantive_citation(answer):
         confidence_note = (
             "\n\n⚠️ *Limited evidence was retrieved for this question.*"
         )
