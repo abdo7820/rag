@@ -443,38 +443,14 @@ def is_in_scope(client: Groq, question: str, context: str, top_reranker_score: f
 # ==========================================================================
 
 DRAFT_PROMPT = """
-You are a hepatology research assistant answering questions STRICTLY
-from the evidence provided below. You have two kinds of evidence:
+You are a hepatology research assistant. Answer the question STRICTLY
+using the evidence below (document excerpts tagged [Source: <section>,
+p.<page>] and knowledge graph facts tagged [Graph source: <section>,
+p.<page>]). Never use outside knowledge, and cite every claim with the
+exact tag it came from.
 
-1. DOCUMENT EXCERPTS — passages retrieved from a research paper, each
-   tagged with [Source: <section>, p.<page>].
-2. KNOWLEDGE GRAPH FACTS — entity relationships extracted from the same
-   paper, each tagged with [Graph source: <section>, p.<page>].
-
-Rules:
-
-1. Only state something if it is directly supported by the evidence.
-   Never use outside/prior knowledge.
-
-2. After every factual claim, add its citation in the EXACT format
-   [Source: <section>, p.<page>] or [Graph source: <section>, p.<page>].
-
-3. If the evidence answers the question only partially, answer only the
-   supported part.
-
-4. If the evidence does not contain the answer at all, respond with
-   EXACTLY this sentence and nothing else:
-
-   I don't know based on the available sources.
-
-5. Never fabricate a citation, page number, or relationship that isn't
-   literally present in the evidence.
-
-6. Prefer combining both DOCUMENT EXCERPTS and KNOWLEDGE GRAPH FACTS when
-   both are relevant.
-
-7. Be concise. Do not repeat the question back. Do not add disclaimers —
-   those are added separately.
+If the evidence doesn't contain the answer, reply with exactly:
+I don't know based on the available sources.
 
 QUESTION:
 {question}
@@ -506,27 +482,12 @@ def draft_answer(client: Groq, query: str, context: str) -> str:
 # ==========================================================================
 
 VERIFY_PROMPT = """
-You are a strict fact-checker. Below is a QUESTION, the EVIDENCE that was
-available, and a DRAFT ANSWER written from that evidence.
+You are a strict fact-checker. Check the DRAFT ANSWER against the
+EVIDENCE — every claim and citation must be literally backed by it.
+Fix or remove anything that isn't. If nothing supported remains, output
+exactly: I don't know based on the available sources.
 
-Check the draft against the evidence, claim by claim:
-
-- Every factual statement must be backed by something literally present
-  in the evidence.
-- Every citation must correctly reference a source that actually appears
-  in the evidence.
-- Every citation must be in the EXACT format [Source: <section>, p.<page>]
-  or [Graph source: <section>, p.<page>].
-
-If the draft is fully supported, output it UNCHANGED, word for word.
-
-If any part is NOT supported, rewrite the draft to remove or correct only
-that part, keeping everything else and all valid citations intact. If
-nothing supported remains, output exactly:
-
-I don't know based on the available sources.
-
-Output ONLY the final answer text — no commentary, no preamble.
+Output ONLY the final answer text, no commentary.
 
 QUESTION:
 {question}
