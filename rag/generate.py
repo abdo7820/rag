@@ -108,6 +108,12 @@ UNVERIFIED_TEXT = (
     "or asking again."
 )
 
+QUOTA_EXCEEDED_TEXT = (
+    "This service has hit its daily usage limit with the AI "
+    "provider and can't generate new answers right now. Please "
+    "try again later (usually within 20-30 minutes)."
+)
+
 
 # ==========================================================================
 # Citation pattern
@@ -125,6 +131,23 @@ CITATION_RE = re.compile(
 
 class GenerationError(RuntimeError):
     """Raised when an LLM generation step fails."""
+
+
+class QuotaExceededError(GenerationError):
+    """Raised specifically when the Groq daily token quota (TPD) is
+    exhausted. Distinct from GenerationError because the right response
+    to show the user is different (an honest "try again later" message,
+    not "I couldn't verify a citation" — the model was never even
+    called)."""
+
+
+def _is_daily_quota_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "rate_limit_exceeded" in text
+        or "tokens per day" in text
+        or "tpd" in text
+    ) and "429" in text
 
 
 # ==========================================================================
@@ -249,6 +272,19 @@ def _create_completion_with_retry(
         except Exception as exc:
 
             last_error = exc
+
+            if _is_daily_quota_error(exc):
+
+                print(
+                    f"[DEBUG] {step_name}: Groq daily token "
+                    f"quota exhausted, failing fast (no point "
+                    f"retrying within the same day): {exc!r}"
+                )
+
+                raise QuotaExceededError(
+                    f"{step_name}: Groq daily token quota "
+                    f"exhausted: {exc}"
+                ) from exc
 
             print(
                 f"[DEBUG] {step_name} "
@@ -1235,7 +1271,7 @@ def draft_answer(
             },
         ],
         temperature=0,
-        reasoning_effort="medium",
+        reasoning_effort="low",
         max_completion_tokens=2000,
     )
 
@@ -1424,7 +1460,7 @@ def verify_answer(
             }
         ],
         temperature=0,
-        reasoning_effort="medium",
+        reasoning_effort="low",
         max_completion_tokens=2500,
     )
 
@@ -1488,7 +1524,29 @@ def _normalize_citation_key(
         kind.strip().lower()
     )
 
+    # Normalize unicode hyphen/dash look-alikes to a plain ASCII "-".
+    # Models sometimes copy the exact character used in the source PDF
+    # text (e.g. U+2011 NON-BREAKING HYPHEN "‑", U+2013 EN DASH "–",
+    # U+2010 HYPHEN "‐") into a citation's section name, while our
+    # chunk metadata always uses a plain ASCII hyphen. Visually
+    # identical, byte-for-byte different — without this, a perfectly
+    # correct citation like "End-stage liver diseases" fails to match
+    # "End‑stage liver diseases" and gets wrongly rejected.
+    _DASH_CHARS = (
+        "\u2010"  # HYPHEN
+        "\u2011"  # NON-BREAKING HYPHEN
+        "\u2012"  # FIGURE DASH
+        "\u2013"  # EN DASH
+        "\u2014"  # EM DASH
+        "\u2212"  # MINUS SIGN
+    )
+
     section_norm = section.strip().lower()
+
+    section_norm = "".join(
+        "-" if ch in _DASH_CHARS else ch
+        for ch in section_norm
+    )
 
     section_norm = re.sub(
         r"^\d+[\.\)\-]\s*",
@@ -1502,10 +1560,17 @@ def _normalize_citation_key(
         section_norm,
     ).strip()
 
+    page_norm = page.strip().lower()
+
+    page_norm = "".join(
+        "-" if ch in _DASH_CHARS else ch
+        for ch in page_norm
+    )
+
     page_norm = re.sub(
         r"[^\w\-]",
         "",
-        page.strip().lower(),
+        page_norm,
     )
 
     return (
@@ -1934,6 +1999,17 @@ def answer_question(
         print(
             "[DEBUG] Verified answer:\n"
             f"{verified}"
+        )
+
+    except QuotaExceededError as exc:
+
+        print(
+            f"[DEBUG] QuotaExceededError: {exc}"
+        )
+
+        return (
+            QUOTA_EXCEEDED_TEXT
+            + DISCLAIMER
         )
 
     except GenerationError as exc:
