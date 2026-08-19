@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiverGuard — Evidence-Grounded Hepatology Q&A</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b1512;
+  --bg-raised:#101d19;
+  --bg-card:#132420;
+  --line:#22392f;
+  --line-soft:#1a2b25;
+  --text:#eef1e9;
+  --text-dim:#9fb0a6;
+  --text-faint:#6b7d73;
+  --amber:#d5a13c;
+  --amber-soft:#3a2f18;
+  --teal:#4d9186;
+  --teal-soft:#122824;
+  --danger:#c96a4f;
+  --radius:14px;
+  --serif:'Fraunces', serif;
+  --sans:'IBM Plex Sans', sans-serif;
+  --mono:'IBM Plex Mono', monospace;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0;
+  background:var(--bg);
+  background-image:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(213,161,60,0.07), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 20%, rgba(77,145,134,0.08), transparent 60%);
+  color:var(--text);
+  font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+
+/* ---------- Hex lobule motif (signature element) ---------- */
+.hex-field{position:absolute;inset:0;overflow:hidden;pointer-events:none;opacity:0.5;}
+.hex-field svg{position:absolute;top:0;left:0;width:100%;height:100%;}
+
+/* ---------- Layout shell ---------- */
+.shell{max-width:1180px;margin:0 auto;padding:0 28px;}
+header.top{
+  position:sticky;top:0;z-index:40;
+  background:rgba(11,21,18,0.86);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line-soft);
+}
+.top-inner{display:flex;align-items:center;justify-content:space-between;padding:16px 0;}
+.brand{display:flex;align-items:center;gap:11px;}
+.brand-mark{width:30px;height:30px;flex:none;}
+.brand-text{font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:0.2px;}
+.brand-sub{font-family:var(--mono);font-size:10px;color:var(--text-faint);letter-spacing:1.5px;text-transform:uppercase;margin-top:1px;}
+nav.tabs{display:flex;gap:4px;background:var(--bg-raised);border:1px solid var(--line);border-radius:999px;padding:4px;}
+nav.tabs button{
+  appearance:none;border:none;background:transparent;color:var(--text-dim);
+  font-family:var(--sans);font-size:13px;font-weight:500;
+  padding:8px 16px;border-radius:999px;cursor:pointer;transition:all .18s ease;
+}
+nav.tabs button:hover{color:var(--text);}
+nav.tabs button.active{background:var(--amber-soft);color:var(--amber);}
+nav.tabs button:focus-visible{outline:2px solid var(--amber);outline-offset:2px;}
+
+/* ---------- Hero ---------- */
+.hero{position:relative;padding:64px 0 46px;overflow:hidden;}
+.hero-inner{position:relative;z-index:2;max-width:680px;}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--amber);margin-bottom:18px;display:flex;align-items:center;gap:10px;}
+.eyebrow::before{content:"";width:16px;height:1px;background:var(--amber);}
+h1.hero-title{font-family:var(--serif);font-weight:500;font-size:clamp(34px,5vw,52px);line-height:1.08;margin:0 0 20px;letter-spacing:-0.5px;}
+h1.hero-title em{font-style:italic;color:var(--amber);font-weight:400;}
+.hero-desc{color:var(--text-dim);font-size:15.5px;line-height:1.7;max-width:560px;margin:0 0 30px;}
+.hero-desc code{font-family:var(--mono);background:var(--bg-card);border:1px solid var(--line);padding:1px 6px;border-radius:5px;font-size:13px;color:var(--teal);}
+
+.pipeline-strip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--bg-card);}
+.pipe-step{flex:1;min-width:120px;padding:14px 16px;border-right:1px solid var(--line);position:relative;}
+.pipe-step:last-child{border-right:none;}
+.pipe-step .n{font-family:var(--mono);font-size:10px;color:var(--text-faint);}
+.pipe-step .t{font-size:13px;font-weight:500;margin-top:3px;}
+.pipe-step .d{font-size:11px;color:var(--text-faint);margin-top:2px;}
+
+/* ---------- Cards / sections ---------- */
+section.panel{padding:8px 0 64px;}
+.card{background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius);}
+.section-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;}
+.section-head h2{font-family:var(--serif);font-weight:500;font-size:24px;margin:0;}
+.section-head p{color:var(--text-faint);font-size:13px;margin:4px 0 0;}
+
+/* ---------- Status pills ---------- */
+.status-row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--text-dim);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text-faint);flex:none;}
+.dot.ok{background:var(--teal);box-shadow:0 0 0 3px var(--teal-soft);}
+.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(201,106,79,0.15);}
+
+/* ---------- Chat ---------- */
+.chat-shell{display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start;}
+@media (max-width:860px){.chat-shell{grid-template-columns:1fr;}}
+.chat-card{padding:0;overflow:hidden;display:flex;flex-direction:column;height:560px;}
+.chat-log{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;}
+.msg{max-width:88%;}
+.msg.user{align-self:flex-end;}
+.msg.bot{align-self:flex-start;}
+.msg .bubble{padding:13px 16px;border-radius:12px;font-size:14px;line-height:1.65;}
+.msg.user .bubble{background:var(--amber-soft);border:1px solid #4a3a1e;color:#f4e6c8;border-bottom-right-radius:3px;}
+.msg.bot .bubble{background:var(--bg-raised);border:1px solid var(--line);border-bottom-left-radius:3px;}
+.msg.bot .bubble strong{color:var(--amber);}
+.msg .meta{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);margin-top:6px;padding:0 3px;}
+.cite-tag{display:inline-block;font-family:var(--mono);font-size:10.5px;background:var(--teal-soft);color:var(--teal);border:1px solid #234742;padding:1px 7px;border-radius:5px;margin:2px 3px 0 0;}
+.chat-input-row{display:flex;gap:10px;padding:16px;border-top:1px solid var(--line-soft);background:var(--bg-raised);}
+.chat-input-row input{
+  flex:1;background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  color:var(--text);font-family:var(--sans);font-size:14px;padding:11px 14px;
+}
+.chat-input-row input:focus{outline:none;border-color:var(--amber);}
+.chat-input-row input::placeholder{color:var(--text-faint);}
+.chat-input-row button{
+  background:var(--amber);color:#231a08;border:none;border-radius:10px;
+  font-family:var(--sans);font-weight:600;font-size:13px;padding:0 20px;cursor:pointer;transition:filter .15s;
+}
+.chat-input-row button:hover{filter:brightness(1.08);}
+.chat-input-row button:disabled{opacity:0.5;cursor:default;}
+.typing{display:flex;gap:4px;padding:4px 0;}
+.typing span{width:5px;height:5px;border-radius:50%;background:var(--text-faint);animation:blink 1.3s infinite;}
+.typing span:nth-child(2){animation-delay:.2s;}
+.typing span:nth-child(3){animation-delay:.4s;}
+@keyframes blink{0%,80%,100%{opacity:.25;}40%{opacity:1;}}
+
+.side-card{padding:18px;font-size:13px;color:var(--text-dim);}
+.side-card h3{font-family:var(--serif);font-size:15px;font-weight:600;margin:0 0 10px;color:var(--text);}
+.side-card ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+.side-card li{cursor:pointer;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-raised);transition:border-color .15s;}
+.side-card li:hover{border-color:var(--teal);}
+.disclaimer-box{margin-top:14px;padding:12px 13px;border-radius:9px;background:var(--amber-soft);border:1px solid #4a3a1e;font-size:11.5px;line-height:1.6;color:#d8c7a0;}
+
+/* ---------- Evidence Explorer ---------- */
+.search-row{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+.search-row input[type=text]{
+  flex:1;min-width:220px;background:var(--bg-card);border:1px solid var(--line);border-radius:10px;
+  color:var(--text);font-family:var(--sans);font-size:14px;padding:12px 15px;
+}
+.search-row input:focus{outline:none;border-color:var(--amber);}
+.toggle-wrap{display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:12.5px;color:var(--text-dim);}
+.toggle{width:32px;height:18px;border-radius:99px;background:var(--line);position:relative;cursor:pointer;transition:background .15s;}
+.toggle.on{background:var(--teal);}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--bg);transition:transform .15s;}
+.toggle.on::after{transform:translateX(14px);}
+.search-row select{background:var(--bg-card);border:1px solid var(--line);border-radius:10px;color:var(--text-dim);font-family:var(--sans);font-size:13px;padding:0 12px;}
+.search-row button.primary{background:var(--amber);color:#231a08;border:none;border-radius:10px;font-family:var(--sans);font-weight:600;font-size:13px;padding:0 22px;cursor:pointer;}
+
+.evidence-list{display:flex;flex-direction:column;gap:10px;}
+.ev-item{border:1px solid var(--line);border-radius:11px;background:var(--bg-card);overflow:hidden;}
+.ev-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;cursor:pointer;gap:12px;}
+.ev-head .left{display:flex;align-items:center;gap:12px;min-width:0;}
+.rank-badge{font-family:var(--mono);font-size:11px;color:var(--amber);background:var(--amber-soft);border-radius:6px;padding:2px 7px;flex:none;}
+.ev-title{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ev-score{font-family:var(--mono);font-size:11.5px;color:var(--teal);flex:none;}
+.ev-body{max-height:0;overflow:hidden;transition:max-height .25s ease;border-top:1px solid var(--line-soft);}
+.ev-item.open .ev-body{max-height:400px;overflow-y:auto;}
+.ev-body-inner{padding:14px 16px;font-size:13px;line-height:1.7;color:var(--text-dim);}
+.ev-body-inner .doi{font-family:var(--mono);font-size:11px;color:var(--text-faint);margin-top:10px;display:block;}
+
+/* ---------- System panel ---------- */
+.metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;}
+@media (max-width:760px){.metrics-grid{grid-template-columns:repeat(2,1fr);}}
+.metric-card{padding:16px;border:1px solid var(--line);border-radius:11px;background:var(--bg-card);}
+.metric-card .label{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);}
+.metric-card .value{font-family:var(--serif);font-size:22px;margin-top:6px;color:var(--text);}
+.metric-card .note{font-size:11.5px;color:var(--text-faint);margin-top:2px;}
+
+.node-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;}
+@media (max-width:760px){.node-grid{grid-template-columns:repeat(3,1fr);}}
+.node-card{padding:14px 12px;text-align:center;border:1px solid var(--line);border-radius:11px;background:var(--bg-card);}
+.node-card .hexicon{width:26px;height:26px;margin:0 auto 8px;}
+.node-card .t{font-size:12.5px;font-weight:500;}
+.node-card .d{font-size:10.5px;color:var(--text-faint);margin-top:2px;}
+
+.eval-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;}
+.eval-table th{text-align:left;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-faint);padding:9px 12px;border-bottom:1px solid var(--line);font-weight:500;}
+.eval-table td{padding:11px 12px;border-bottom:1px solid var(--line-soft);color:var(--text-dim);}
+.eval-table td.hi{color:var(--teal);font-family:var(--mono);}
+.eval-table tr:last-child td{border-bottom:none;}
+
+footer{border-top:1px solid var(--line-soft);padding:26px 0 40px;color:var(--text-faint);font-size:11.5px;line-height:1.7;}
+
+.api-config{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--text-faint);}
+.api-config input{background:transparent;border:none;border-bottom:1px dashed var(--line);color:var(--text-dim);font-family:var(--mono);font-size:11px;padding:2px 0;width:260px;}
+.api-config input:focus{outline:none;border-color:var(--amber);}
+
+.hidden{display:none !important;}
+.empty-state{padding:40px 20px;text-align:center;color:var(--text-faint);font-size:13px;}
+</style>
+</head>
+<body>
+
+<div class="hex-field" id="hexField"></div>
+
+<header class="top">
+  <div class="shell top-inner">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" fill="none">
+        <path d="M20 3 L35 11.5 V28.5 L20 37 L5 28.5 V11.5 Z" stroke="#d5a13c" stroke-width="1.6"/>
+        <path d="M20 3 V20 M20 20 L35 11.5 M20 20 L5 11.5 M20 20 V37 M20 20 L35 28.5 M20 20 L5 28.5" stroke="#4d9186" stroke-width="1" opacity="0.6"/>
+        <circle cx="20" cy="20" r="2.6" fill="#d5a13c"/>
+      </svg>
+      <div>
+        <div class="brand-text">LiverGuard</div>
+        <div class="brand-sub">Hepatology Evidence Engine</div>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="active" data-tab="chat">Ask</button>
+      <button data-tab="evidence">Evidence</button>
+      <button data-tab="system">System</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="shell">
+    <section class="hero">
+      <div class="hero-inner">
+        <div class="eyebrow">Single-source · fully cited · self-verifying</div>
+        <h1 class="hero-title">Ask a research paper <em>anything</em>, get back only what it actually says.</h1>
+        <p class="hero-desc">
+          LiverGuard reads one hepatology paper — <em>Liver diseases: epidemiology, causes, trends and predictions</em> —
+          through semantic search, BM25 and a knowledge graph, fuses the candidates with RRF, reranks with a cross-encoder,
+          then drafts and re-verifies the answer before a single citation is allowed to reach you. Nothing ships without
+          a <code>[Source: section, p.N]</code> tag traceable back to the text.
+        </p>
+        <div class="pipeline-strip" id="pipelineStrip">
+          <div class="pipe-step"><div class="n">01</div><div class="t">Semantic + BM25</div><div class="d">dual retrieval</div></div>
+          <div class="pipe-step"><div class="n">02</div><div class="t">RRF Fusion</div><div class="d">rank merge</div></div>
+          <div class="pipe-step"><div class="n">03</div><div class="t">Cross-encoder</div><div class="d">rerank</div></div>
+          <div class="pipe-step"><div class="n">04</div><div class="t">Graph lookup</div><div class="d">Neo4j facts</div></div>
+          <div class="pipe-step"><div class="n">05</div><div class="t">Draft + verify</div><div class="d">Groq LLM</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CHAT TAB ============ -->
+    <section class="panel" id="tab-chat">
+      <div class="section-head">
+        <div>
+          <h2>Ask the paper</h2>
+          <p>Answers are grounded only in retrieved passages — off-topic questions are declined, not guessed at.</p>
+        </div>
+        <div class="status-row"><span class="dot" id="chatStatusDot"></span><span id="chatStatusText">checking backend…</span></div>
+      </div>
+
+      <div class="chat-shell">
+        <div class="card chat-card">
+          <div class="chat-log" id="chatLog"></div>
+          <div class="chat-input-row">
+            <input type="text" id="chatInput" placeholder="e.g. What causes liver cirrhosis?" autocomplete="off">
+            <button id="chatSend">Ask</button>
+          </div>
+        </div>
+
+        <div class="card side-card">
+          <h3>Try asking</h3>
+          <ul id="suggestionList">
+            <li>What causes liver cirrhosis?</li>
+            <li>What is the global prevalence of MASLD?</li>
+            <li>How does hepatitis B progress to liver cancer?</li>
+            <li>What are the main risk factors for HCC?</li>
+          </ul>
+          <div class="disclaimer-box">
+            Educational research assistant only. Answers come from the connected paper and are
+            not medical advice, diagnosis, or treatment guidance.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ EVIDENCE TAB ============ -->
+    <section class="panel hidden" id="tab-evidence">
+      <div class="section-head">
+        <div>
+          <h2>Evidence explorer</h2>
+          <p>Inspect exactly what retrieval surfaces before generation ever sees it.</p>
+        </div>
+      </div>
+
+      <div class="search-row">
+        <input type="text" id="evQuery" placeholder="Search the paper directly…">
+        <select id="evK">
+          <option value="3">3 results</option>
+          <option value="5" selected>5 results</option>
+          <option value="8">8 results</option>
+          <option value="10">10 results</option>
+        </select>
+        <div class="toggle-wrap">
+          <span>Rerank</span>
+          <div class="toggle on" id="evRerankToggle"></div>
+        </div>
+        <button class="primary" id="evSearchBtn">Search</button>
+      </div>
+
+      <div class="evidence-list" id="evList">
+        <div class="empty-state">Run a search to see retrieved chunks, their retrieval method, and rerank scores.</div>
+      </div>
+    </section>
+
+    <!-- ============ SYSTEM TAB ============ -->
+    <section class="panel hidden" id="tab-system">
+      <div class="section-head">
+        <div>
+          <h2>System status</h2>
+          <p>Live backend health and the retrieval architecture behind every answer.</p>
+        </div>
+        <div class="api-config">
+          API base
+          <input type="text" id="apiBaseInput" value="">
+        </div>
+      </div>
+
+      <div class="metrics-grid" id="metricsGrid">
+        <div class="metric-card"><div class="label">Backend</div><div class="value" id="mBackend">—</div><div class="note">Railway production</div></div>
+        <div class="metric-card"><div class="label">Retrieval</div><div class="value">Hybrid</div><div class="note">Semantic + BM25</div></div>
+        <div class="metric-card"><div class="label">Reranker</div><div class="value">Jina</div><div class="note">Cross-encoder v2</div></div>
+        <div class="metric-card"><div class="label">Generation</div><div class="value">Grounded</div><div class="note">Cited, self-verified</div></div>
+      </div>
+
+      <div class="node-grid" style="margin-bottom:30px;">
+        <div class="node-card"><div class="t">Semantic</div><div class="d">Dense retrieval</div></div>
+        <div class="node-card"><div class="t">BM25</div><div class="d">Sparse retrieval</div></div>
+        <div class="node-card"><div class="t">RRF</div><div class="d">Rank fusion</div></div>
+        <div class="node-card"><div class="t">Jina</div><div class="d">Reranking</div></div>
+        <div class="node-card"><div class="t">Neo4j</div><div class="d">Graph context</div></div>
+        <div class="node-card"><div class="t">Groq</div><div class="d">Grounded generation</div></div>
+      </div>
+
+      <div class="card" style="padding:20px;">
+        <h3 style="font-family:var(--serif);font-size:16px;font-weight:600;margin:0 0 4px;">Latest evaluation snapshot</h3>
+        <p style="font-size:12px;color:var(--text-faint);margin:0 0 4px;">27-question benchmark, top_k = 5</p>
+        <table class="eval-table">
+          <thead><tr><th>Metric</th><th>RRF only</th><th>+ Rerank</th></tr></thead>
+          <tbody>
+            <tr><td>Hit Rate@5</td><td class="hi">0.926</td><td class="hi">1.000</td></tr>
+            <tr><td>Avg Precision@5</td><td class="hi">0.548</td><td class="hi">0.570</td></tr>
+            <tr><td>MRR</td><td class="hi">0.859</td><td class="hi">0.901</td></tr>
+            <tr><td>Avg latency</td><td class="hi">0.147s</td><td class="hi">1.038s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="healthRaw" style="margin-top:20px;"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="shell">
+    LiverGuard is a research-only demo answering exclusively from one connected hepatology paper
+    (Gan et al., 2025 · doi:10.1038/s41392-024-02072-z). It is not a medical device and does not
+    provide diagnosis, dosage, or treatment advice.
+  </div>
+</footer>
+
+<script>
+/* ---------------------------------------------------------------
+   Config
+--------------------------------------------------------------- */
+let API_BASE = "https://rag-production-154d.up.railway.app";
+document.getElementById('apiBaseInput').value = API_BASE;
+document.getElementById('apiBaseInput').addEventListener('change', e=>{
+  API_BASE = e.target.value.trim().replace(/\/$/,'');
+  checkHealth();
+});
+
+/* ---------------------------------------------------------------
+   Hex lobule field (signature background)
+--------------------------------------------------------------- */
+(function drawHexField(){
+  const field = document.getElementById('hexField');
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS,"svg");
+  svg.setAttribute("viewBox","0 0 1200 500");
+  svg.setAttribute("preserveAspectRatio","xMidYMin slice");
+  const r = 46, w = r*Math.sqrt(3), h = r*1.5;
+  const cols = 20, rows = 6;
+  for(let row=0; row<rows; row++){
+    for(let col=0; col<cols; col++){
+      const cx = col*w + (row%2? w/2:0) - 40;
+      const cy = row*h + 20;
+      if(cx < -60 || cx > 1260) continue;
+      const pts = [];
+      for(let i=0;i<6;i++){
+        const a = Math.PI/180*(60*i - 30);
+        pts.push((cx+r*Math.cos(a)).toFixed(1)+","+(cy+r*Math.sin(a)).toFixed(1));
+      }
+      const poly = document.createElementNS(NS,"polygon");
+      poly.setAttribute("points", pts.join(" "));
+      const dist = row/rows;
+      poly.setAttribute("fill","none");
+      poly.setAttribute("stroke", Math.random()>0.94 ? "#d5a13c" : "#1c332b");
+      poly.setAttribute("stroke-width", Math.random()>0.94 ? "1.1":"0.8");
+      poly.setAttribute("opacity", (0.9-dist*0.7).toFixed(2));
+      svg.appendChild(poly);
+    }
+  }
+  field.appendChild(svg);
+})();
+
+/* ---------------------------------------------------------------
+   Tabs
+--------------------------------------------------------------- */
+document.querySelectorAll('nav.tabs button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    ['chat','evidence','system'].forEach(t=>{
+      document.getElementById('tab-'+t).classList.toggle('hidden', t!==btn.dataset.tab);
+    });
+  });
+});
+
+/* ---------------------------------------------------------------
+   Health check
+--------------------------------------------------------------- */
+async function checkHealth(){
+  const dot = document.getElementById('chatStatusDot');
+  const text = document.getElementById('chatStatusText');
+  const mBackend = document.getElementById('mBackend');
+  const raw = document.getElementById('healthRaw');
+  try{
+    const res = await fetch(API_BASE + '/health', {signal: AbortSignal.timeout(15000)});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    dot.className = 'dot ok';
+    text.textContent = 'backend online';
+    mBackend.textContent = 'Online';
+    raw.innerHTML = '<div class="card" style="padding:16px;"><h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Raw /health response</h3><pre style="font-family:var(--mono);font-size:12px;color:var(--text-dim);white-space:pre-wrap;margin:0;">'+JSON.stringify(data,null,2)+'</pre></div>';
+  }catch(err){
+    dot.className = 'dot bad';
+    text.textContent = 'backend unreachable';
+    mBackend.textContent = 'Offline';
+    raw.innerHTML = '<div class="card" style="padding:16px;color:var(--danger);font-size:13px;">Could not reach '+API_BASE+'/health — '+err.message+'</div>';
+  }
+}
+checkHealth();
+
+/* ---------------------------------------------------------------
+   Chat
+--------------------------------------------------------------- */
+const chatLog = document.getElementById('chatLog');
+const chatInput = document.getElementById('chatInput');
+const chatSend = document.getElementById('chatSend');
+
+function citeTags(text){
+  const re = /\[(Graph source|Source):\s*([^,\]]+),\s*p\.\s*([\w\-]+)\s*\]/g;
+  let m, tags = [];
+  while((m = re.exec(text))){
+    tags.push(`<span class="cite-tag">${m[1]==='Graph source'?'⌬':'§'} ${m[2].trim()} · p.${m[3].trim()}</span>`);
+  }
+  return tags.join('');
+}
+function stripCitations(text){
+  return text.replace(/\[(Graph source|Source):[^\]]+\]/g, '').replace(/\n{3,}/g,'\n\n');
+}
+
+function addMessage(role, html, meta){
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = `<div class="bubble">${html}</div>${meta? `<div class="meta">${meta}</div>`:''}`;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
+}
+
+function addTyping(){
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.id = 'typingIndicator';
+  div.innerHTML = `<div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>`;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+function removeTyping(){
+  const t = document.getElementById('typingIndicator');
+  if(t) t.remove();
+}
+
+async function sendQuestion(q){
+  if(!q.trim()) return;
+  addMessage('user', q.replace(/</g,'&lt;'));
+  chatInput.value = '';
+  chatSend.disabled = true;
+  addTyping();
+  const t0 = performance.now();
+  try{
+    const res = await fetch(API_BASE + '/ask', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({question:q, top_k:5}),
+      signal: AbortSignal.timeout(120000)
+    });
+    removeTyping();
+    if(!res.ok){
+      let detail;
+      try{ detail = (await res.json()).detail || res.statusText; }catch(e){ detail = res.statusText; }
+      addMessage('bot', `⚠️ Backend error: ${detail}`);
+      return;
+    }
+    const data = await res.json();
+    const answer = data.answer || 'No answer returned.';
+    const cites = citeTags(answer);
+    const body = stripCitations(answer).replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    const elapsed = ((performance.now()-t0)/1000).toFixed(2);
+    addMessage('bot', body + (cites? `<div style="margin-top:10px;">${cites}</div>` : ''), `⚡ ${elapsed}s`);
+  }catch(err){
+    removeTyping();
+    addMessage('bot', `⚠️ Connection error: ${err.message}`);
+  }finally{
+    chatSend.disabled = false;
+    chatInput.focus();
+  }
+}
+
+chatSend.addEventListener('click', ()=> sendQuestion(chatInput.value));
+chatInput.addEventListener('keydown', e=>{ if(e.key==='Enter') sendQuestion(chatInput.value); });
+document.querySelectorAll('#suggestionList li').forEach(li=>{
+  li.addEventListener('click', ()=> sendQuestion(li.textContent));
+});
+
+addMessage('bot', "Ask me anything about the connected liver-disease research paper — causes, prevalence, mechanisms, risk factors. I'll only answer from cited passages.");
+
+/* ---------------------------------------------------------------
+   Evidence explorer
+--------------------------------------------------------------- */
+let rerankOn = true;
+const rerankToggle = document.getElementById('evRerankToggle');
+rerankToggle.addEventListener('click', ()=>{
+  rerankOn = !rerankOn;
+  rerankToggle.classList.toggle('on', rerankOn);
+});
+
+async function runEvidenceSearch(){
+  const q = document.getElementById('evQuery').value.trim();
+  const k = document.getElementById('evK').value;
+  const list = document.getElementById('evList');
+  if(!q){ list.innerHTML = '<div class="empty-state">Enter a query first.</div>'; return; }
+  list.innerHTML = '<div class="empty-state">Searching…</div>';
+  try{
+    const res = await fetch(API_BASE + '/search', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query:q, top_k:parseInt(k), rerank:rerankOn}),
+      signal: AbortSignal.timeout(60000)
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const results = data.results || [];
+    if(!results.length){ list.innerHTML = '<div class="empty-state">No chunks retrieved for this query.</div>'; return; }
+    list.innerHTML = '';
+    results.forEach(r=>{
+      const item = document.createElement('div');
+      item.className = 'ev-item';
+      const meta = [r.section, r.page_start?`p.${r.page_start}`:null, r.retrieval_method].filter(Boolean).join(' · ');
+      item.innerHTML = `
+        <div class="ev-head">
+          <div class="left">
+            <span class="rank-badge">#${r.rank ?? '—'}</span>
+            <span class="ev-title">${meta || 'Untitled chunk'}</span>
+          </div>
+          <span class="ev-score">${typeof r.score==='number' ? r.score.toFixed(4) : '—'}</span>
+        </div>
+        <div class="ev-body"><div class="ev-body-inner">${(r.text||'').replace(/</g,'&lt;')}${r.doi?`<span class="doi">DOI: ${r.doi}</span>`:''}</div></div>
+      `;
+      item.querySelector('.ev-head').addEventListener('click', ()=> item.classList.toggle('open'));
+      list.appendChild(item);
+    });
+  }catch(err){
+    list.innerHTML = `<div class="empty-state">Search failed — ${err.message}</div>`;
+  }
+}
+document.getElementById('evSearchBtn').addEventListener('click', runEvidenceSearch);
+document.getElementById('evQuery').addEventListener('keydown', e=>{ if(e.key==='Enter') runEvidenceSearch(); });
+</script>
+</body>
+</html>
