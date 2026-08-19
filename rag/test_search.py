@@ -1,7 +1,23 @@
-"""Hybrid retrieval: Semantic (Chroma) + BM25 -> RRF fusion -> Cross-encoder rerank.
+"""Hybrid retrieval: Semantic (Chroma) + BM25 -> RRF fusion -> Jina reranker.
 
 Run:
     python rag/test_search.py "What causes liver cirrhosis?"
+
+Railway:
+    USE_HF_INFERENCE_API=true
+    HF_API_TOKEN=...
+    JINA_API_KEY=...
+
+Pipeline:
+    HF Embedding
+        ↓
+    Chroma + BM25
+        ↓
+    RRF Fusion
+        ↓
+    Jina Cross-Encoder Reranking
+        ↓
+    Final Top-K
 """
 
 import math
@@ -13,8 +29,12 @@ import threading
 
 import chromadb
 from chromadb.config import Settings
+import requests
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+sys.path.insert(
+    0,
+    str(pathlib.Path(__file__).resolve().parent.parent),
+)
 
 from config import (
     VECTOR_DB_DIR,
@@ -31,38 +51,39 @@ from config import (
 )
 
 from bm25_index import simple_tokenize
-import requests
 
 
 # ==========================================================================
-# Hugging Face Inference
-# ==========================================================================
-#
-# Railway:
-#   USE_HF_INFERENCE_API=true
-#
-# This avoids loading:
-#   - torch
-#   - sentence-transformers
-#   - embedding model
-#   - reranker model
-#
-# locally.
-#
-# We use the current Hugging Face Router instead of the deprecated:
-#   api-inference.huggingface.co
-#
+# Configuration
 # ==========================================================================
 
-HF_API_URL = "https://router.huggingface.co/hf-inference/models"
+HF_API_URL = (
+    "https://router.huggingface.co/hf-inference/models"
+)
 
+JINA_API_URL = "https://api.jina.ai/v1/rerank"
+
+# Use this model unless explicitly overridden.
+JINA_RERANKER_MODEL = os.getenv(
+    "JINA_RERANKER_MODEL",
+    "jina-reranker-v2-base-multilingual",
+)
+
+JINA_API_KEY = os.getenv(
+    "JINA_API_KEY",
+)
+
+
+# ==========================================================================
+# Hugging Face headers
+# ==========================================================================
 
 def _hf_headers() -> dict:
     """Build clean Hugging Face authorization headers."""
 
     if not HF_API_TOKEN:
         raise RuntimeError(
-            "HF_API_TOKEN is not set (.env) "
+            "HF_API_TOKEN is not set "
             "but USE_HF_INFERENCE_API=true."
         )
 
@@ -80,15 +101,41 @@ def _hf_headers() -> dict:
 
 
 # ==========================================================================
+# Jina headers
+# ==========================================================================
+
+def _jina_headers() -> dict:
+    """Build clean Jina authorization headers."""
+
+    if not JINA_API_KEY:
+        raise RuntimeError(
+            "JINA_API_KEY is not set. "
+            "Add it to Railway Variables or .env."
+        )
+
+    token = JINA_API_KEY.strip()
+
+    if not token:
+        raise RuntimeError(
+            "JINA_API_KEY is empty."
+        )
+
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+# ==========================================================================
 # Hugging Face Embedding
 # ==========================================================================
 
-def _hf_embed_query(text: str) -> list[float]:
+def _hf_embed_query(
+    text: str,
+) -> list[float]:
     """
-    Generate an embedding using Hugging Face Inference.
-
-    Uses the configured embedding model, for example:
-        BAAI/bge-large-en-v1.5
+    Generate query embedding using Hugging Face Inference.
     """
 
     url = (
@@ -115,7 +162,8 @@ def _hf_embed_query(text: str) -> list[float]:
 
     data = response.json()
 
-    # Expected:
+    # Normal sentence embedding:
+    #
     # [
     #     [0.01, 0.02, ...]
     # ]
@@ -131,16 +179,14 @@ def _hf_embed_query(text: str) -> list[float]:
             for value in data[0]
         ]
 
-    # Some models/providers may return:
+    # Token-level fallback:
     #
     # [
     #     [
-    #         [token_embedding...],
-    #         [token_embedding...],
+    #         [token_vector],
+    #         [token_vector],
     #     ]
     # ]
-    #
-    # Fallback to first token vector.
     if (
         isinstance(data, list)
         and data
@@ -160,80 +206,81 @@ def _hf_embed_query(text: str) -> list[float]:
 
 
 # ==========================================================================
-# Hugging Face Reranker
+# Jina Cross-Encoder Reranking
 # ==========================================================================
 
-def _hf_rerank_scores(
+def _jina_rerank_scores(
     query: str,
     texts: list[str],
 ) -> list[float]:
     """
-    Run cross-encoder reranking through Hugging Face.
+    Rerank all candidate documents in ONE Jina request.
 
-    Returns one relevance score for every text.
+    Returns scores in the SAME order as `texts`.
     """
 
-    scores = []
+    if not texts:
+        return []
 
-    for text in texts:
+    payload = {
+        "model": JINA_RERANKER_MODEL,
+        "query": query,
+        "documents": texts,
+        "top_n": len(texts),
+        "return_documents": False,
+    }
 
-        response = requests.post(
-            f"{HF_API_URL}/{RERANKER_MODEL_NAME}",
-            headers=_hf_headers(),
-            json={
-                "inputs": {
-                    "text": query,
-                    "text_pair": text,
-                },
-                "parameters": {
-                    "function_to_apply": "sigmoid",
-                },
-            },
-            timeout=60,
+    response = requests.post(
+        JINA_API_URL,
+        headers=_jina_headers(),
+        json=payload,
+        timeout=90,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            "Jina reranker request failed "
+            f"({response.status_code}): "
+            f"{response.text[:2000]}"
         )
 
-        if not response.ok:
-            raise RuntimeError(
-                "Hugging Face reranker request failed "
-                f"({response.status_code}): "
-                f"{response.text[:1000]}"
-            )
+    data = response.json()
 
-        result = response.json()
+    results = data.get(
+        "results",
+        [],
+    )
 
-        if (
-            isinstance(result, list)
-            and result
-        ):
-            item = result[0]
-
-            if isinstance(item, dict):
-                score = item.get(
-                    "score",
-                    0.0,
-                )
-            else:
-                score = float(item)
-
-        elif isinstance(result, dict):
-
-            score = float(
-                result.get(
-                    "score",
-                    0.0,
-                )
-            )
-
-        else:
-
-            raise RuntimeError(
-                "Unexpected Hugging Face "
-                f"reranker response: {result!r}"
-            )
-
-        scores.append(
-            float(score)
+    if not results:
+        raise RuntimeError(
+            "Jina returned no reranking results."
         )
+
+    scores = [
+        0.0
+        for _ in texts
+    ]
+
+    for item in results:
+
+        index = item.get(
+            "index"
+        )
+
+        score = item.get(
+            "relevance_score"
+        )
+
+        if index is None:
+            continue
+
+        if score is None:
+            continue
+
+        index = int(index)
+
+        if 0 <= index < len(scores):
+            scores[index] = float(score)
 
     return scores
 
@@ -255,10 +302,10 @@ _bm25_lock = threading.Lock()
 
 def get_embed_model():
     """
-    Used only when USE_HF_INFERENCE_API=false.
+    Local embedding model.
 
-    sentence-transformers is imported lazily so Railway does not need
-    torch or sentence-transformers when using the HF API.
+    Only used when:
+        USE_HF_INFERENCE_API=false
     """
 
     global _embed_model
@@ -270,7 +317,7 @@ def get_embed_model():
             if _embed_model is None:
 
                 from sentence_transformers import (
-                    SentenceTransformer
+                    SentenceTransformer,
                 )
 
                 _embed_model = SentenceTransformer(
@@ -282,7 +329,10 @@ def get_embed_model():
 
 def get_reranker():
     """
-    Used only when USE_HF_INFERENCE_API=false.
+    Local reranker.
+
+    Only used when:
+        USE_HF_INFERENCE_API=false
     """
 
     global _reranker_model
@@ -294,11 +344,11 @@ def get_reranker():
             if _reranker_model is None:
 
                 from sentence_transformers import (
-                    CrossEncoder
+                    CrossEncoder,
                 )
 
                 print(
-                    f"Loading reranker: "
+                    "Loading local reranker: "
                     f"{RERANKER_MODEL_NAME}"
                 )
 
@@ -323,11 +373,15 @@ def get_chroma_collection():
 
             if _chroma_collection is None:
 
-                client = chromadb.PersistentClient(
-                    path=str(VECTOR_DB_DIR),
-                    settings=Settings(
-                        anonymized_telemetry=False
-                    ),
+                client = (
+                    chromadb.PersistentClient(
+                        path=str(
+                            VECTOR_DB_DIR
+                        ),
+                        settings=Settings(
+                            anonymized_telemetry=False
+                        ),
+                    )
                 )
 
                 try:
@@ -341,7 +395,8 @@ def get_chroma_collection():
                 except Exception as exc:
 
                     raise RuntimeError(
-                        f"Could not load Chroma collection "
+                        f"Could not load Chroma "
+                        f"collection "
                         f"'{COLLECTION_NAME}'. "
                         "Run rag/store.py first."
                     ) from exc
@@ -366,7 +421,7 @@ def get_bm25_payload() -> dict:
                 if not BM25_INDEX_PATH.exists():
 
                     raise FileNotFoundError(
-                        f"BM25 index not found at "
+                        "BM25 index not found at "
                         f"{BM25_INDEX_PATH}. "
                         "Run rag/bm25_index.py first."
                     )
@@ -376,8 +431,8 @@ def get_bm25_payload() -> dict:
                     "rb",
                 ) as file:
 
-                    _bm25_payload = pickle.load(
-                        file
+                    _bm25_payload = (
+                        pickle.load(file)
                     )
 
     return _bm25_payload
@@ -387,7 +442,9 @@ def get_bm25_payload() -> dict:
 # Metadata helpers
 # ==========================================================================
 
-def format_pages(meta: dict) -> str:
+def format_pages(
+    meta: dict,
+) -> str:
 
     start = meta.get(
         "page_start"
@@ -412,7 +469,9 @@ def format_pages(meta: dict) -> str:
     return f"{start}-{end}"
 
 
-def print_reference(meta: dict):
+def print_reference(
+    meta: dict,
+):
 
     print("Reference:")
 
@@ -458,13 +517,8 @@ def print_preview(
         else ""
     )
 
-    print(
-        "\nText:"
-    )
-
-    print(
-        preview + suffix
-    )
+    print("\nText:")
+    print(preview + suffix)
 
 
 # ==========================================================================
@@ -479,7 +533,9 @@ def semantic_search(
         "\n=== Semantic (Chroma) results ==="
     )
 
-    collection = get_chroma_collection()
+    collection = (
+        get_chroma_collection()
+    )
 
     if USE_HF_INFERENCE_API:
 
@@ -595,10 +651,12 @@ def bm25_search(
 
     bm25 = payload["bm25"]
     texts = payload["texts"]
+
     metadata = payload.get(
         "metadata",
         [],
     )
+
     chunk_ids = payload.get(
         "chunk_ids",
         [],
@@ -688,10 +746,6 @@ def reciprocal_rank_fusion(
     semantic_results,
     bm25_results,
 ):
-    """
-    score(d) =
-        sum(1 / (RRF_K + rank))
-    """
 
     fused = {}
 
@@ -797,17 +851,30 @@ def rerank_results(
 
     if USE_HF_INFERENCE_API:
 
+        print(
+            "Reranker provider: Jina API"
+        )
+
+        print(
+            f"Reranker model: "
+            f"{JINA_RERANKER_MODEL}"
+        )
+
         texts = [
             result["text"]
             for result in results
         ]
 
-        scores = _hf_rerank_scores(
+        scores = _jina_rerank_scores(
             query,
             texts,
         )
 
     else:
+
+        print(
+            "Reranker provider: local"
+        )
 
         reranker = get_reranker()
 
@@ -827,7 +894,7 @@ def rerank_results(
 
         scores = [
             1.0 / (
-                1.0 + math.exp(-score)
+                1.0 + math.exp(-float(score))
             )
             for score in raw_scores
         ]
@@ -906,17 +973,19 @@ if __name__ == "__main__":
         f"Query: {query}"
     )
 
-    semantic_results = semantic_search(
-        query
+    semantic_results = (
+        semantic_search(query)
     )
 
-    bm25_results = bm25_search(
-        query
+    bm25_results = (
+        bm25_search(query)
     )
 
-    rrf_results = reciprocal_rank_fusion(
-        semantic_results,
-        bm25_results,
+    rrf_results = (
+        reciprocal_rank_fusion(
+            semantic_results,
+            bm25_results,
+        )
     )
 
     print(
