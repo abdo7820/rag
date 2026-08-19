@@ -95,7 +95,12 @@ UNVERIFIED_TEXT = (
 )
 
 CITATION_RE = re.compile(
+    r"(?:"
     r"\[(Graph source|Source):\s*([^,\]]+?),\s*p\.\s*([\w\-]+)\s*\]"
+    r"|"
+    r"【(Graph source|Source):\s*([^,】]+?),\s*p\.\s*([\w\-]+)\s*】"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -589,7 +594,24 @@ def verify_answer(client: Groq, query: str, context: str, draft: str) -> str:
 
 
 def _extract_citations(text: str) -> list[tuple[str, str, str]]:
-    return [(kind.strip(), section.strip(), page.strip()) for kind, section, page in CITATION_RE.findall(text)]
+    citations = []
+
+    for match in CITATION_RE.findall(text):
+        ascii_kind, ascii_section, ascii_page, full_kind, full_section, full_page = match
+
+        kind = ascii_kind or full_kind
+        section = ascii_section or full_section
+        page = ascii_page or full_page
+
+        citations.append(
+            (
+                kind.strip(),
+                section.strip(),
+                page.strip(),
+            )
+        )
+
+    return citations
 
 
 def _valid_citation_keys(chunks: list[dict], graph_facts: list[dict]) -> set[tuple[str, str, str]]:
@@ -620,7 +642,17 @@ def has_only_verifiable_citations(answer: str, chunks: list[dict], graph_facts: 
 
 
 def _has_substantive_citation(answer: str) -> bool:
-    return bool(_extract_citations(answer))
+    """
+    Detect citations in both ASCII and full-width formats returned by the
+    generator/verifier.
+    """
+    patterns = [
+        r"\[Source:\s*[^\]]+\]",
+        r"\[Graph source:\s*[^\]]+\]",
+        r"【Source:\s*[^】]+】",
+        r"【Graph source:\s*[^】]+】",
+    ]
+    return any(re.search(pattern, answer, flags=re.IGNORECASE) for pattern in patterns)
 
 
 def finalize_answer(
