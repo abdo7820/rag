@@ -3,10 +3,19 @@ config.py
 
 Central configuration for the Liver RAG pipeline.
 
-Place this file at the project ROOT (same level as rag/, models/, eval/,
-data/, app.py). Every script imports its constants from here instead of
-redefining its own paths/params, so changing one value here updates the
-whole pipeline.
+This file is shared by:
+    - rag/
+    - models/
+    - eval/
+    - app.py
+
+Production target:
+    GitHub -> Railway
+
+Railway is designed for low-RAM deployment:
+    - Query embeddings -> Hugging Face Inference API
+    - Reranking -> Jina API
+    - No local BGE / CrossEncoder / torch loading
 """
 
 import os
@@ -17,15 +26,13 @@ import pathlib
 # Environment
 # ==========================================================================
 
-# Set ENVIRONMENT=production on Railway.
-# Locally it defaults to "development".
 ENVIRONMENT = os.getenv(
     "ENVIRONMENT",
     "development",
-)
+).strip().lower()
 
 IS_PRODUCTION = (
-    ENVIRONMENT.lower() == "production"
+    ENVIRONMENT == "production"
 )
 
 
@@ -44,43 +51,43 @@ VECTOR_DB_DIR = BASE_DIR / "vectorDB"
 MD_PATH = BASE_DIR / "liver_diseases.md"
 
 PDF_PATH = (
-    DATA_DIR
-    / "s41392-024-02072-z.pdf"
+    DATA_DIR /
+    "s41392-024-02072-z.pdf"
 )
 
 CHUNKS_PATH = (
-    DATA_DIR
-    / "chunks.json"
+    DATA_DIR /
+    "chunks.json"
 )
 
 EMBEDDINGS_PATH = (
-    DATA_DIR
-    / "embeddings.npy"
+    DATA_DIR /
+    "embeddings.npy"
 )
 
 EMBEDDINGS_META_PATH = (
-    DATA_DIR
-    / "embeddings_meta.json"
+    DATA_DIR /
+    "embeddings_meta.json"
 )
 
 BM25_INDEX_PATH = (
-    DATA_DIR
-    / "bm25_index.pkl"
+    DATA_DIR /
+    "bm25_index.pkl"
 )
 
 GRAPH_TRIPLES_PATH = (
-    DATA_DIR
-    / "graph_triples.json"
+    DATA_DIR /
+    "graph_triples.json"
 )
 
 QA_DATASET_PATH = (
-    EVAL_DIR
-    / "qa_dataset.json"
+    EVAL_DIR /
+    "qa_dataset.json"
 )
 
 RESULTS_PATH = (
-    EVAL_DIR
-    / "results.json"
+    EVAL_DIR /
+    "results.json"
 )
 
 
@@ -102,60 +109,69 @@ DOI = (
 # Models
 # ==========================================================================
 
-# Embedding model.
+# --------------------------------------------------------------------------
+# Embedding model
+# --------------------------------------------------------------------------
 #
-# Local:
-#     BAAI/bge-large-en-v1.5
-#
-# Railway:
-#     The query embedding is sent to Hugging Face when
-#     USE_HF_INFERENCE_API=true.
+# Corpus embeddings were generated using this model.
 #
 # IMPORTANT:
-# Changing this model requires rebuilding the corpus embeddings
-# and Chroma vector database because embedding dimensions differ.
+# If this value changes, the corpus embeddings and Chroma database
+# must be rebuilt.
+#
+# Local:
+#     SentenceTransformer loads this model.
+#
+# Railway:
+#     Query embeddings are generated through Hugging Face API.
+#
 
 EMBED_MODEL_NAME = os.getenv(
     "EMBED_MODEL_NAME",
     "BAAI/bge-large-en-v1.5",
-)
+).strip()
 
 
-# Local CrossEncoder model.
+# --------------------------------------------------------------------------
+# Local CrossEncoder
+# --------------------------------------------------------------------------
 #
-# This is ONLY used when:
+# Used ONLY when:
 #
-#     USE_HF_INFERENCE_API=false
+#     USE_JINA_RERANKER_API=false
 #
-# On Railway we use Jina instead, so this model does not need
-# to be loaded into Railway RAM.
+# Railway should NOT load this model.
+#
 
 RERANKER_MODEL_NAME = os.getenv(
     "RERANKER_MODEL_NAME",
     "cross-encoder/ms-marco-MiniLM-L-6-v2",
-)
+).strip()
 
 
 # ==========================================================================
 # Hugging Face Inference API
 # ==========================================================================
 
-# When true:
+# Railway:
 #
-#     Embedding:
-#         Hugging Face API
+#     USE_HF_INFERENCE_API=true
 #
-#     Reranking:
-#         Jina API
+# This means:
 #
-# This prevents torch + sentence-transformers from being loaded
-# into the small Railway container.
+#     Query
+#       ↓
+#     Hugging Face embedding API
+#       ↓
+#     Chroma
+#
+# The local BGE model is NOT loaded into RAM.
 
 USE_HF_INFERENCE_API = (
     os.getenv(
         "USE_HF_INFERENCE_API",
         "false",
-    ).lower()
+    ).strip().lower()
     == "true"
 )
 
@@ -164,28 +180,109 @@ HF_API_TOKEN = os.getenv(
     "HF_API_TOKEN"
 )
 
+if HF_API_TOKEN:
+    HF_API_TOKEN = HF_API_TOKEN.strip()
+
+
+HF_API_BASE_URL = (
+    "https://api-inference.huggingface.co/models"
+)
+
 
 # ==========================================================================
-# Jina Reranker
+# Jina Reranker API
 # ==========================================================================
 
-# Jina is used for cross-encoder reranking when
-# USE_HF_INFERENCE_API=true.
+# Production:
+#
+#     USE_JINA_RERANKER_API=true
+#
+# The reranker is executed remotely through Jina.
+#
+# This prevents:
+#
+#     torch
+#     CrossEncoder
+#     reranker weights
+#
+# from being loaded into Railway RAM.
+
+USE_JINA_RERANKER_API = (
+    os.getenv(
+        "USE_JINA_RERANKER_API",
+        "false",
+    ).strip().lower()
+    == "true"
+)
+
 
 JINA_API_KEY = os.getenv(
     "JINA_API_KEY"
 )
 
+if JINA_API_KEY:
+    JINA_API_KEY = JINA_API_KEY.strip()
+
 
 JINA_RERANKER_MODEL = os.getenv(
     "JINA_RERANKER_MODEL",
     "jina-reranker-v2-base-multilingual",
-)
+).strip()
 
 
 JINA_API_URL = (
     "https://api.jina.ai/v1/rerank"
 )
+
+
+# --------------------------------------------------------------------------
+# Remote API retry / timeout configuration
+# --------------------------------------------------------------------------
+
+REMOTE_API_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "REMOTE_API_TIMEOUT_SECONDS",
+        "60",
+    )
+)
+
+
+REMOTE_API_MAX_RETRIES = int(
+    os.getenv(
+        "REMOTE_API_MAX_RETRIES",
+        "2",
+    )
+)
+
+
+# ==========================================================================
+# Production model configuration validation
+# ==========================================================================
+
+# These checks intentionally happen only when production starts.
+#
+# They prevent Railway from silently starting with missing API keys.
+
+if IS_PRODUCTION:
+
+    if USE_HF_INFERENCE_API and not HF_API_TOKEN:
+
+        raise RuntimeError(
+            "Production configuration error: "
+            "USE_HF_INFERENCE_API=true but "
+            "HF_API_TOKEN is missing."
+        )
+
+    if (
+        USE_JINA_RERANKER_API
+        and not JINA_API_KEY
+    ):
+
+        raise RuntimeError(
+            "Production configuration error: "
+            "USE_JINA_RERANKER_API=true but "
+            "JINA_API_KEY is missing."
+        )
 
 
 # ==========================================================================
@@ -210,9 +307,17 @@ CHROMA_INSERT_BATCH = 100
 # Web server
 # ==========================================================================
 
-# Keep a SINGLE worker on small Railway instances.
+# Railway low-RAM deployment:
 #
-# Additional workers duplicate process memory.
+# Keep exactly ONE worker.
+#
+# Multiple workers duplicate:
+#     FastAPI
+#     Chroma
+#     BM25
+#     Python process memory
+#
+# and can cause OOM.
 
 WEB_CONCURRENCY = int(
     os.getenv(
@@ -235,11 +340,12 @@ COLLECTION_NAME = (
 # Retrieval parameters
 # ==========================================================================
 
-# Number of candidates retrieved independently by:
+# Candidates retrieved independently by:
 #
-#     Semantic search
+#     Semantic Search
 #     BM25
 #
+
 CANDIDATE_K = 30
 
 
@@ -248,17 +354,19 @@ CANDIDATE_K = 30
 RRF_K = 60
 
 
-# Number of candidates kept after RRF and before reranking.
+# Production:
+#
+# Candidates kept after RRF and sent to reranker.
 
 RRF_TOP_K = 8
 
 
-# Wider candidate pool for offline evaluation only.
+# Evaluation only.
 
 EVAL_RRF_TOP_K = 20
 
 
-# Final number of documents returned after reranking.
+# Final results after reranking.
 
 FINAL_TOP_K = 5
 
@@ -281,14 +389,12 @@ CHUNK_OVERLAP = 80
 # Generation
 # ==========================================================================
 
-# Current Groq-compatible generation model.
-
 GENERATION_MODEL_NAME = (
     "openai/gpt-oss-120b"
 )
 
 
-# Number of chunks used by answer_question().
+# Number of retrieved chunks used by /ask.
 
 RETRIEVAL_TOP_K = 5
 
@@ -297,16 +403,6 @@ RETRIEVAL_TOP_K = 5
 # Graph context
 # ==========================================================================
 
-# Keep graph context relatively small.
-#
-# A very large graph context can introduce weak/general facts such as:
-#
-#     INTRODUCTION
-#     REFERENCES
-#     unrelated entities
-#
-# which can result in noisy citations.
-
 GRAPH_FACTS_LIMIT = 5
 
 
@@ -314,20 +410,7 @@ GRAPH_FACTS_LIMIT = 5
 # Confidence
 # ==========================================================================
 
-# Keep the existing threshold.
-#
-# IMPORTANT:
-# If a result with a reranker score > 0.5 is still labeled
-# "Low confidence", then the actual confidence calculation is
-# probably happening elsewhere in generate.py.
-#
-# Do NOT blindly lower this value further.
-
 LOW_CONFIDENCE_THRESHOLD = 0.5
-
-
-# Minimum confidence for determining whether the question
-# belongs to the source/document scope.
 
 SCOPE_CONFIDENCE_FLOOR = 0.3
 
