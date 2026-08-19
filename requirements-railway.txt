@@ -14,3 +14,4 @@ tiktoken
 langchain_text_splitters
 pymupdf4llm
 requests
+huggingface_hub
