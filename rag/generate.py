@@ -29,12 +29,20 @@ import re
 import sys
 import time
 
-import torch
+try:
+    import torch
+    torch.set_num_threads(os.cpu_count() or 4)
+except ImportError:
+    # torch isn't installed on light deployments (requirements-railway.txt +
+    # USE_HF_INFERENCE_API=true) — embedding/reranking run via HTTP APIs
+    # instead, so this is fine. Without this guard, importing generate.py
+    # (and therefore app.py, which imports it) crashes on any container
+    # that only installed requirements-railway.txt.
+    print("[DEBUG] torch not installed — assuming USE_HF_INFERENCE_API=true deployment.")
+
 from dotenv import load_dotenv
 from groq import Groq
 from neo4j import GraphDatabase
-
-torch.set_num_threads(os.cpu_count() or 4)
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR / "rag"))
