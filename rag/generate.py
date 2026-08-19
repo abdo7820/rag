@@ -298,13 +298,45 @@ def _dedupe_graph_facts(facts: list[dict]) -> list[dict]:
     deduped = []
 
     for fact in facts:
-        key = (fact.get("source"), fact.get("relation"), fact.get("target"), fact.get("section"), fact.get("page"))
+        key = (
+            fact.get("source"),
+            fact.get("relation"),
+            fact.get("target"),
+            fact.get("section"),
+            fact.get("page"),
+        )
         if key in seen:
             continue
         seen.add(key)
         deduped.append(fact)
 
     return deduped
+
+
+def _filter_graph_facts(facts: list[dict]) -> list[dict]:
+    """Keep only graph facts useful as direct supporting evidence."""
+    allowed_relations = {
+        "CAUSES", "CAUSE", "INCREASES_RISK_OF", "ASSOCIATED_WITH",
+        "LEADS_TO", "CONTRIBUTES_TO", "PROMOTES", "ACTIVATES",
+        "INHIBITS", "PREVENTS", "PROTECTS_AGAINST", "RELATED_TO",
+    }
+
+    filtered = []
+
+    for fact in facts:
+        section = str(fact.get("section") or "").strip().lower()
+        relation = str(fact.get("relation") or "").strip().upper()
+
+        # Do not use bibliography/reference pages as medical evidence.
+        if section in {"references", "reference", "bibliography"}:
+            continue
+
+        if relation and relation not in allowed_relations:
+            continue
+
+        filtered.append(fact)
+
+    return _dedupe_graph_facts(filtered)
 
 
 def retrieve_graph_facts(driver, original_question: str, limit: int = GRAPH_FACTS_LIMIT) -> list[dict]:
@@ -343,7 +375,7 @@ def retrieve_graph_facts(driver, original_question: str, limit: int = GRAPH_FACT
             )
             facts = [dict(record) for record in result]
 
-        return _dedupe_graph_facts(facts)
+        return _filter_graph_facts(facts)
 
     except Exception as exc:
         print(f"[warn] Neo4j query failed: {exc}. Continuing without graph facts.")
@@ -377,7 +409,7 @@ def build_full_context(chunks: list[dict], graph_facts: list[dict]) -> str:
 
     graph_context = build_graph_context(graph_facts)
     if graph_context:
-        parts.append("### KNOWLEDGE GRAPH FACTS\n\n" + graph_context)
+        parts.append("### KNOWLEDGE GRAPH FACTS (SUPPORTING ONLY)\n\n" + graph_context)
 
     return "\n\n".join(parts) if parts else "(no evidence retrieved)"
 
@@ -443,14 +475,32 @@ def is_in_scope(client: Groq, question: str, context: str, top_reranker_score: f
 # ==========================================================================
 
 DRAFT_PROMPT = """
-You are a hepatology research assistant. Answer the question STRICTLY
-using the evidence below (document excerpts tagged [Source: <section>,
-p.<page>] and knowledge graph facts tagged [Graph source: <section>,
-p.<page>]). Never use outside knowledge, and cite every claim with the
-exact tag it came from.
+You are a strict, evidence-grounded hepatology research assistant.
 
-If the evidence doesn't contain the answer, reply with exactly:
-I don't know based on the available sources.
+Answer the QUESTION using ONLY the supplied evidence.
+
+SOURCE PRIORITY:
+1. DOCUMENT EXCERPTS are PRIMARY evidence.
+2. KNOWLEDGE GRAPH FACTS are SUPPORTING evidence only.
+3. Never use outside medical knowledge.
+
+CITATION RULES:
+- Cite every factual claim with the exact source tag that supports it.
+- Prefer [Source: section, p.page] citations for the main answer.
+- Use [Graph source: section, p.page] only when the graph fact directly
+  supports the claim.
+- Never cite a REFERENCES/BIBLIOGRAPHY entry as evidence for a medical claim.
+- Do not turn a paper reference, citation list, or general association into
+  a causal claim.
+- Do not infer a cause merely because two entities appear together.
+- If a claim is only weakly supported, omit it.
+
+ANSWER QUALITY:
+- Answer the exact question directly.
+- Use concise bullets when appropriate.
+- Do not mention retrieval, confidence scores, internal reasoning, or the graph.
+- If the evidence does not adequately support the answer, reply exactly:
+  I don't know based on the available sources.
 
 QUESTION:
 {question}
@@ -458,6 +508,7 @@ QUESTION:
 EVIDENCE:
 {context}
 """
+
 
 
 def draft_answer(client: Groq, query: str, context: str) -> str:
@@ -482,12 +533,26 @@ def draft_answer(client: Groq, query: str, context: str) -> str:
 # ==========================================================================
 
 VERIFY_PROMPT = """
-You are a strict fact-checker. Check the DRAFT ANSWER against the
-EVIDENCE — every claim and citation must be literally backed by it.
-Fix or remove anything that isn't. If nothing supported remains, output
-exactly: I don't know based on the available sources.
+You are a strict fact-checker for a medical research RAG system.
 
-Output ONLY the final answer text, no commentary.
+Check the DRAFT ANSWER against the EVIDENCE.
+
+Rules:
+- Every factual claim must be directly supported by the supplied evidence.
+- Every citation must exactly match a source tag present in the evidence.
+- Prefer DOCUMENT EXCERPTS over KNOWLEDGE GRAPH FACTS.
+- A graph relationship may support a claim only when the relationship itself
+  directly states that relationship.
+- Never convert an association, mention, or reference-list entry into a
+  causal claim.
+- Remove unsupported causes, numbers, mechanisms, treatments, or prevalence.
+- Remove citations to REFERENCES/BIBLIOGRAPHY when used as medical evidence.
+- Do not add outside knowledge.
+- Keep the answer concise and directly responsive.
+- If no sufficiently supported answer remains, output exactly:
+  I don't know based on the available sources.
+
+Output ONLY the final answer text.
 
 QUESTION:
 {question}
@@ -498,6 +563,7 @@ EVIDENCE:
 DRAFT ANSWER:
 {draft}
 """
+
 
 
 def verify_answer(client: Groq, query: str, context: str, draft: str) -> str:
@@ -545,16 +611,28 @@ def has_only_verifiable_citations(answer: str, chunks: list[dict], graph_facts: 
     return all(citation in valid_keys for citation in citations)
 
 
-def finalize_answer(answer: str, top_reranker_score: float) -> str:
+def _has_substantive_citation(answer: str) -> bool:
+    return bool(_extract_citations(answer))
+
+
+def finalize_answer(
+    answer: str,
+    top_reranker_score: float,
+    chunks: list[dict],
+) -> str:
+    """
+    Do not treat a raw reranker score as a universal confidence probability.
+    Different rerankers use different score ranges/calibration.
+    """
     confidence_note = ""
 
-    if top_reranker_score < LOW_CONFIDENCE_THRESHOLD:
+    if not chunks or not _has_substantive_citation(answer):
         confidence_note = (
-            "\n\n⚠️ *Low confidence retrieval — the closest match found "
-            "wasn't a strong fit for this question.*"
+            "\n\n⚠️ *Limited evidence was retrieved for this question.*"
         )
 
     return answer + confidence_note + DISCLAIMER
+
 
 
 # ==========================================================================
@@ -634,7 +712,11 @@ def answer_question(client: Groq, driver, query: str, top_k: int = RETRIEVAL_TOP
         return UNVERIFIED_TEXT + DISCLAIMER
 
     print(f"[TIMING] TOTAL (answer_question): {time.time() - t_start:.2f}s")
-    return finalize_answer(verified, top_reranker_score)
+    return finalize_answer(
+        verified,
+        top_reranker_score,
+        chunks,
+    )
 
 
 def main():
