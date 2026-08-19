@@ -1,0 +1,10 @@
+# Full local development requirements — includes torch + sentence-transformers
+# so rag/embed.py and rag/test_search.py can run entirely locally
+# (USE_HF_INFERENCE_API=false, the default).
+#
+# Deploying to Railway or another low-RAM host? Use requirements-railway.txt
+# instead, together with USE_HF_INFERENCE_API=true — see README.md.
+-r requirements-railway.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+sentence-transformers

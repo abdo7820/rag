@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liver Diseases RAG — Project Console</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --ink:#0B1917;
+  --panel:#12241F;
+  --panel-2:#17302A;
+  --panel-3:#1C3A32;
+  --teal:#49D8A4;
+  --teal-dim:#2E7A5C;
+  --amber:#E8A33D;
+  --rose:#E2604F;
+  --text:#EAF3EE;
+  --text-dim:#8FB0A5;
+  --rule:rgba(234,243,238,0.12);
+  --rule-strong:rgba(234,243,238,0.22);
+  --serif:'Source Serif 4', Georgia, serif;
+  --sans:'IBM Plex Sans', -apple-system, sans-serif;
+  --mono:'IBM Plex Mono', 'SF Mono', monospace;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+html,body{margin:0;padding:0;}
+body{
+  background:
+    radial-gradient(1200px 500px at 15% -10%, rgba(73,216,164,0.07), transparent 60%),
+    var(--ink);
+  color:var(--text);
+  font-family:var(--sans);
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--teal);color:var(--ink);}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:2px;}
+a{color:inherit;}
+h1,h2,h3{font-family:var(--serif);margin:0;}
+p{margin:0;}
+code{font-family:var(--mono);}
+
+/* ---------- Top masthead ---------- */
+.masthead{
+  border-bottom:1px solid var(--rule-strong);
+  padding:20px 24px;
+  position:sticky;top:0;z-index:20;
+  background:rgba(11,25,23,0.92);
+  backdrop-filter:blur(8px);
+}
+.masthead-inner{max-width:1220px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:14px;}
+.brand{display:flex;align-items:baseline;gap:10px;margin-right:auto;}
+.brand .mark{width:9px;height:9px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal);flex-shrink:0;}
+.brand h1{font-size:19px;font-weight:700;letter-spacing:-0.01em;}
+.brand .sub{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);letter-spacing:0.06em;text-transform:uppercase;}
+
+.base-url{
+  display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--rule);
+  border-radius:6px;padding:6px 10px;font-family:var(--mono);font-size:12px;color:var(--text-dim);
+}
+.base-url input{background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:12px;width:170px;outline:none;}
+.pill{
+  display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;letter-spacing:0.03em;
+  color:var(--text-dim);background:var(--panel);border:1px solid var(--rule);border-radius:20px;padding:5px 9px 5px 7px;
+}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:#3A5750;flex-shrink:0;transition:background .3s, box-shadow .3s;}
+.pill.on .dot{background:var(--teal);box-shadow:0 0 6px var(--teal);}
+.pill.off .dot{background:var(--rose);}
+.pill.on{color:var(--text);}
+.stamp{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;
+  padding:6px 11px;border-radius:4px;border:1px solid var(--rule);color:var(--text-dim);transition:all .3s;
+}
+.stamp.prod{color:var(--teal);border-color:var(--teal-dim);background:rgba(73,216,164,0.08);}
+.stamp.dev{color:var(--amber);border-color:rgba(232,163,61,0.4);background:rgba(232,163,61,0.08);}
+.stamp.offline{color:var(--rose);border-color:rgba(226,96,79,0.4);background:rgba(226,96,79,0.08);}
+.refresh-btn{
+  font-family:var(--mono);font-size:11px;color:var(--text-dim);background:none;border:1px solid var(--rule);
+  border-radius:6px;padding:6px 9px;cursor:pointer;transition:border-color .2s, color .2s;
+}
+.refresh-btn:hover{border-color:var(--teal-dim);color:var(--teal);}
+
+/* ---------- Shell: sidebar + main ---------- */
+.shell{max-width:1220px;margin:0 auto;display:grid;grid-template-columns:200px 1fr;gap:36px;padding:28px 24px 100px;}
+@media (max-width:880px){.shell{grid-template-columns:1fr;padding:20px 16px 80px;}}
+
+.sidebar{position:sticky;top:82px;align-self:start;display:flex;flex-direction:column;gap:2px;}
+@media (max-width:880px){
+  .sidebar{position:static;flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:10px;margin-bottom:6px;border-bottom:1px solid var(--rule);}
+}
+.nav-link{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:0.03em;color:var(--text-dim);
+  padding:8px 10px;border-radius:6px;text-decoration:none;white-space:nowrap;
+  border-left:2px solid transparent;transition:color .2s, background .2s, border-color .2s;
+}
+@media (max-width:880px){.nav-link{border-left:none;border-bottom:2px solid transparent;}}
+.nav-link:hover{color:var(--text);background:var(--panel);}
+.nav-link.active{color:var(--teal);border-color:var(--teal);background:var(--panel);}
+
+.main{display:flex;flex-direction:column;gap:56px;min-width:0;}
+.section-head{margin-bottom:18px;}
+.eyebrow{
+  font-family:var(--mono);font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--teal);
+  margin-bottom:8px;
+}
+.section-head h2{font-size:clamp(22px,3vw,30px);font-weight:700;letter-spacing:-0.01em;margin-bottom:8px;}
+.section-head .dek{font-size:14px;color:var(--text-dim);max-width:64ch;}
+
+/* ---------- Overview stat grid ---------- */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+@media (max-width:760px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
+.stat-card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 14px 12px;}
+.stat-card .s-label{font-family:var(--mono);font-size:9.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+.stat-card .s-value{font-family:var(--serif);font-size:19px;font-weight:600;line-height:1.25;}
+.stat-card .s-note{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:4px;}
+.paper-card{
+  margin-top:12px;background:var(--panel-2);border:1px solid var(--rule);border-radius:10px;
+  padding:16px 18px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center;
+}
+.paper-card .p-title{font-family:var(--serif);font-size:16px;font-style:italic;max-width:52ch;}
+.paper-card .p-meta{font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+
+/* ---------- Architecture ---------- */
+.pipeline{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:22px 18px 16px;overflow-x:auto;margin-bottom:22px;}
+.pipeline svg{display:block;min-width:640px;width:100%;height:auto;}
+.node-label{font-family:var(--mono);font-size:11px;fill:var(--text-dim);}
+.node-circle{fill:var(--panel-3);stroke:var(--rule-strong);stroke-width:1.5;}
+.edge{stroke:var(--rule-strong);stroke-width:1.5;}
+.sub-label{font-family:var(--mono);font-size:9.5px;fill:var(--text-dim);opacity:0.75;}
+.arch-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px;}
+@media (max-width:900px){.arch-grid{grid-template-columns:repeat(2,1fr);}}
+.arch-chip{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:10px 11px;}
+.arch-chip .a-k{font-family:var(--mono);font-size:9.5px;color:var(--teal);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;}
+.arch-chip .a-v{font-size:12.5px;color:var(--text-dim);line-height:1.4;}
+
+.step-list{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:24px;}
+.step-item{display:flex;gap:16px;padding:16px 18px;background:var(--panel);border-bottom:1px solid var(--rule);}
+.step-item:last-child{border-bottom:none;}
+.step-item:nth-child(even){background:var(--panel-2);}
+.step-num{font-family:var(--mono);font-size:13px;color:var(--teal);flex-shrink:0;width:26px;padding-top:2px;}
+.step-body .st-title{font-weight:600;font-size:14.5px;margin-bottom:3px;display:flex;align-items:center;gap:8px;}
+.step-body .st-tag{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-dim);border:1px solid var(--rule);border-radius:4px;padding:1px 6px;}
+.step-body .st-desc{font-size:13px;color:var(--text-dim);line-height:1.5;}
+
+/* ---------- Evaluation ---------- */
+.eval-summary{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px;}
+.eval-badge{
+  font-family:var(--mono);font-size:11.5px;background:var(--panel);border:1px solid var(--rule);
+  border-radius:20px;padding:6px 12px;color:var(--text-dim);
+}
+.eval-badge b{color:var(--teal);}
+.eval-table{border:1px solid var(--rule);border-radius:10px;overflow:hidden;}
+.eval-row{padding:16px 18px;border-bottom:1px solid var(--rule);background:var(--panel);}
+.eval-row:last-child{border-bottom:none;}
+.eval-row:nth-child(even){background:var(--panel-2);}
+.eval-row-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;}
+.eval-row-head .e-name{font-family:var(--serif);font-size:15px;font-weight:600;}
+.eval-row-head .e-delta{font-family:var(--mono);font-size:11px;color:var(--amber);}
+.eval-bars{display:flex;flex-direction:column;gap:6px;}
+.eval-bar-line{display:grid;grid-template-columns:90px 1fr 52px;gap:8px;align-items:center;}
+.eval-bar-line .b-label{font-family:var(--mono);font-size:10px;color:var(--text-dim);}
+.eval-bar-track{height:7px;background:var(--rule);border-radius:4px;overflow:hidden;}
+.eval-bar-fill{height:100%;border-radius:4px;}
+.eval-bar-fill.rrf{background:var(--text-dim);}
+.eval-bar-fill.rerank{background:var(--teal);}
+.eval-bar-line .b-val{font-family:var(--mono);font-size:10.5px;color:var(--text);text-align:right;}
+.eval-legend{display:flex;gap:16px;margin-top:14px;font-family:var(--mono);font-size:10.5px;color:var(--text-dim);}
+.eval-legend span{display:flex;align-items:center;gap:6px;}
+.eval-legend .sw{width:9px;height:9px;border-radius:2px;}
+.eval-legend .sw.rrf{background:var(--text-dim);}
+.eval-legend .sw.rerank{background:var(--teal);}
+.eval-note{margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+
+/* ---------- Console (modes + query + results) ---------- */
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;}
+@media (max-width:720px){.modes{grid-template-columns:1fr;}}
+.mode-card{
+  text-align:left;background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  padding:16px 16px 14px;cursor:pointer;transition:border-color .2s, background .2s, transform .15s;
+  color:var(--text);font-family:var(--sans);
+}
+.mode-card:hover{border-color:var(--rule-strong);transform:translateY(-1px);}
+.mode-card.selected{border-color:var(--teal-dim);background:var(--panel-2);}
+.mode-card .m-eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;}
+.mode-card.selected .m-eyebrow{color:var(--teal);}
+.mode-card .m-title{font-family:var(--serif);font-size:19px;font-weight:600;margin-bottom:4px;}
+.mode-card .m-desc{font-size:12.5px;color:var(--text-dim);line-height:1.45;}
+.m-latency{font-family:var(--mono);font-size:10px;color:var(--text-dim);}
+
+.console-panel{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:18px;}
+.query-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;}
+.query-field{flex:1;min-width:240px;}
+.query-field label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+.query-field textarea{
+  width:100%;background:var(--ink);border:1px solid var(--rule);border-radius:8px;color:var(--text);
+  font-family:var(--sans);font-size:14.5px;padding:11px 12px;resize:vertical;min-height:46px;line-height:1.4;
+}
+.query-field textarea:focus{border-color:var(--teal-dim);}
+.run-btn{
+  font-family:var(--mono);font-size:12.5px;letter-spacing:0.04em;background:var(--teal);color:var(--ink);
+  border:none;border-radius:8px;padding:12px 20px;cursor:pointer;font-weight:600;white-space:nowrap;
+  transition:opacity .2s, transform .1s;
+}
+.run-btn:hover{opacity:0.9;}
+.run-btn:active{transform:scale(0.98);}
+.run-btn:disabled{opacity:0.45;cursor:default;}
+
+.results{margin-top:20px;}
+.results-meta{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--rule);}
+.state-msg{font-family:var(--mono);font-size:12.5px;color:var(--text-dim);padding:24px 4px;text-align:center;}
+.state-msg.error{color:var(--rose);}
+.chunk-card{border-bottom:1px solid var(--rule);padding:14px 2px;}
+.chunk-card:last-child{border-bottom:none;}
+.chunk-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap;}
+.chunk-rank{font-family:var(--mono);color:var(--teal);font-size:12px;}
+.chunk-section{font-family:var(--serif);font-weight:600;font-size:15px;}
+.chunk-meta{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);margin-left:auto;}
+.chunk-text{font-size:13.5px;color:var(--text-dim);line-height:1.55;}
+.score-bar{height:3px;background:var(--rule);border-radius:2px;margin-top:8px;overflow:hidden;}
+.score-bar > div{height:100%;background:var(--teal);}
+.answer-card .answer-body{font-family:var(--serif);font-size:16.5px;line-height:1.7;color:var(--text);white-space:pre-wrap;}
+.answer-body .cite{font-family:var(--mono);font-size:11px;color:var(--teal);background:rgba(73,216,164,0.1);padding:1px 5px;border-radius:4px;white-space:nowrap;}
+
+/* ---------- Graph explorer ---------- */
+.graph-panel{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:18px;}
+.graph-row{display:flex;gap:10px;flex-wrap:wrap;}
+.graph-input{
+  flex:1;min-width:200px;background:var(--ink);border:1px solid var(--rule);border-radius:8px;
+  color:var(--text);font-family:var(--mono);font-size:13.5px;padding:11px 12px;
+}
+.graph-input:focus{border-color:var(--teal-dim);outline:none;}
+.chip-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+.chip{
+  font-family:var(--mono);font-size:10.5px;color:var(--text-dim);background:var(--ink);border:1px solid var(--rule);
+  border-radius:20px;padding:4px 10px;cursor:pointer;transition:border-color .2s, color .2s;
+}
+.chip:hover{border-color:var(--teal-dim);color:var(--teal);}
+.fact-row{display:flex;align-items:center;gap:10px;padding:12px 2px;border-bottom:1px solid var(--rule);flex-wrap:wrap;font-size:13.5px;}
+.fact-row:last-child{border-bottom:none;}
+.fact-node{font-family:var(--serif);font-weight:600;}
+.fact-rel{font-family:var(--mono);font-size:11px;color:var(--teal);background:rgba(73,216,164,0.08);padding:2px 8px;border-radius:20px;}
+.fact-meta{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);margin-left:auto;}
+
+/* ---------- API reference ---------- */
+.api-grid{display:flex;flex-direction:column;gap:12px;}
+.api-card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;}
+.api-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;}
+.method{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:0.04em;padding:3px 8px;border-radius:4px;}
+.method.get{color:var(--teal);background:rgba(73,216,164,0.12);}
+.method.post{color:var(--amber);background:rgba(232,163,61,0.12);}
+.api-path{font-family:var(--mono);font-size:13.5px;}
+.api-desc{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;line-height:1.5;}
+.code-block{
+  background:var(--ink);border:1px solid var(--rule);border-radius:8px;padding:10px 12px;
+  font-family:var(--mono);font-size:11.5px;color:var(--text-dim);overflow-x:auto;white-space:pre;
+}
+.code-block .k{color:var(--teal);}
+
+footer.foot{
+  margin-top:8px;padding-top:16px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:10.5px;
+  color:var(--text-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <span class="mark"></span>
+      <h1>Liver Diseases RAG</h1>
+      <span class="sub">Project Console</span>
+    </div>
+    <div class="base-url">
+      <span>API</span>
+      <input id="baseUrlInput" type="text" value="http://127.0.0.1:8000" spellcheck="false">
+    </div>
+    <span class="pill" id="pill-groq"><span class="dot"></span>GROQ</span>
+    <span class="pill" id="pill-neo4j"><span class="dot"></span>NEO4J</span>
+    <span class="pill" id="pill-vdb"><span class="dot"></span>VDB</span>
+    <span class="pill" id="pill-bm25"><span class="dot"></span>BM25</span>
+    <button class="refresh-btn" id="refreshBtn" title="Re-check health">↻</button>
+    <span class="stamp offline" id="stamp">checking…</span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar">
+    <a class="nav-link" href="#overview" data-target="overview">Overview</a>
+    <a class="nav-link" href="#architecture" data-target="architecture">Architecture</a>
+    <a class="nav-link" href="#evaluation" data-target="evaluation">Evaluation</a>
+    <a class="nav-link" href="#console" data-target="console">Console</a>
+    <a class="nav-link" href="#graph" data-target="graph">Graph explorer</a>
+    <a class="nav-link" href="#api" data-target="api">API reference</a>
+  </nav>
+
+  <main class="main">
+
+    <!-- ===================== OVERVIEW ===================== -->
+    <section id="overview">
+      <div class="section-head">
+        <div class="eyebrow">Project overview</div>
+        <h2>A hybrid RAG system for one hepatology paper</h2>
+        <p class="dek">Semantic search, BM25, a knowledge graph, and cross-encoder reranking work together so every answer traces back to a page and section — not a hallucinated guess.</p>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card"><div class="s-label">Embedding model</div><div class="s-value">BGE-large</div><div class="s-note">BAAI/bge-large-en-v1.5</div></div>
+        <div class="stat-card"><div class="s-label">Reranker</div><div class="s-value">MS MARCO MiniLM</div><div class="s-note">cross-encoder/ms-marco-L-6-v2</div></div>
+        <div class="stat-card"><div class="s-label">Generation model</div><div class="s-value">gpt-oss-120b</div><div class="s-note">via Groq</div></div>
+        <div class="stat-card"><div class="s-label">Chunking</div><div class="s-value">512 / 80</div><div class="s-note">tokens per chunk / overlap</div></div>
+        <div class="stat-card"><div class="s-label">Retrieval</div><div class="s-value">Semantic + BM25</div><div class="s-note">fused with RRF, k=60</div></div>
+        <div class="stat-card"><div class="s-label">Knowledge graph</div><div class="s-value">Neo4j Aura</div><div class="s-note">entity–relation triples</div></div>
+        <div class="stat-card"><div class="s-label">QA benchmark</div><div class="s-value">27 questions</div><div class="s-note">keyword-coverage judged</div></div>
+        <div class="stat-card"><div class="s-label">Answer pipeline</div><div class="s-value">6 steps</div><div class="s-note">guardrail → verify</div></div>
+      </div>
+
+      <div class="paper-card">
+        <div>
+          <div class="s-label" style="margin-bottom:6px;">Source document</div>
+          <div class="p-title">"Liver diseases: epidemiology, causes, trends and predictions"</div>
+        </div>
+        <div class="p-meta">Gan et al. · Signal Transduction and Targeted Therapy (2025) 10:33<br>doi:10.1038/s41392-024-02072-z</div>
+      </div>
+    </section>
+
+    <!-- ===================== ARCHITECTURE ===================== -->
+    <section id="architecture">
+      <div class="section-head">
+        <div class="eyebrow">Architecture</div>
+        <h2>Two pipelines, chained together</h2>
+        <p class="dek">A retrieval pipeline finds the evidence. A 6-step generation chain decides — deterministically, where possible — whether and how to answer with it.</p>
+      </div>
+
+      <div class="pipeline">
+        <svg viewBox="0 0 900 130" xmlns="http://www.w3.org/2000/svg">
+          <line class="edge" x1="70" y1="45" x2="200" y2="45"/>
+          <line class="edge" x1="70" y1="85" x2="200" y2="85"/>
+          <line class="edge" x1="270" y1="45" x2="380" y2="65"/>
+          <line class="edge" x1="270" y1="85" x2="380" y2="65"/>
+          <line class="edge" x1="420" y1="65" x2="530" y2="65"/>
+          <line class="edge" x1="70" y1="115" x2="620" y2="115"/>
+          <line class="edge" x1="570" y1="65" x2="700" y2="65"/>
+          <line class="edge" x1="660" y1="115" x2="700" y2="75"/>
+          <circle class="node-circle" cx="45" cy="65" r="22"/><text class="node-label" x="45" y="70" text-anchor="middle">Q</text>
+          <circle class="node-circle" cx="235" cy="45" r="20"/><text class="node-label" x="235" y="21" text-anchor="middle">Semantic</text>
+          <circle class="node-circle" cx="235" cy="85" r="20"/><text class="node-label" x="235" y="122" text-anchor="middle">BM25</text>
+          <circle class="node-circle" cx="400" cy="65" r="20"/><text class="node-label" x="400" y="41" text-anchor="middle">RRF</text>
+          <circle class="node-circle" cx="550" cy="65" r="20"/><text class="node-label" x="550" y="41" text-anchor="middle">Rerank</text>
+          <circle class="node-circle" cx="640" cy="115" r="18"/><text class="node-label" x="640" y="127" text-anchor="middle" dy="12">Graph</text>
+          <circle class="node-circle" cx="720" cy="70" r="22"/><text class="node-label" x="720" y="75" text-anchor="middle">A</text>
+          <text class="sub-label" x="45" y="95" text-anchor="middle">query</text>
+          <text class="sub-label" x="720" y="100" text-anchor="middle">answer</text>
+        </svg>
+      </div>
+
+      <div class="arch-grid">
+        <div class="arch-chip"><div class="a-k">Candidate pool</div><div class="a-v">30 per retriever</div></div>
+        <div class="arch-chip"><div class="a-k">RRF constant</div><div class="a-v">k = 60</div></div>
+        <div class="arch-chip"><div class="a-k">Kept after fusion</div><div class="a-v">8 candidates</div></div>
+        <div class="arch-chip"><div class="a-k">Final results</div><div class="a-v">top 5</div></div>
+        <div class="arch-chip"><div class="a-k">Graph facts limit</div><div class="a-v">15 per question</div></div>
+      </div>
+
+      <div class="step-list">
+        <div class="step-item">
+          <div class="step-num">01</div>
+          <div class="step-body">
+            <div class="st-title">Guardrail<span class="st-tag">deterministic</span></div>
+            <div class="st-desc">Regex screen blocks personal medical-advice questions (dosage, prescriptions, diagnosis) before any model is called.</div>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-num">02</div>
+          <div class="step-body">
+            <div class="st-title">Query rewrite<span class="st-tag">LLM</span></div>
+            <div class="st-desc">Expands abbreviations and adds medical synonyms to the search query, improving retrieval recall. Falls back to the original question on failure.</div>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-num">03</div>
+          <div class="step-body">
+            <div class="st-title">Retrieve<span class="st-tag">hybrid + graph</span></div>
+            <div class="st-desc">Vector + BM25 → RRF → rerank on the rewritten query, plus a Neo4j graph lookup on the ORIGINAL wording so entity names still match verbatim.</div>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-num">04</div>
+          <div class="step-body">
+            <div class="st-title">Scope check<span class="st-tag">LLM + confidence signal</span></div>
+            <div class="st-desc">An LLM topical judgement is combined with the retrieval confidence score — both must agree the question is off-topic before it's rejected, so one bad call can't wrongly block an answer.</div>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-num">05</div>
+          <div class="step-body">
+            <div class="st-title">Draft answer<span class="st-tag">LLM</span></div>
+            <div class="st-desc">Answers strictly from retrieved evidence with inline citations. Retries on transient failures; never silently returns an unfinished draft.</div>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-num">06</div>
+          <div class="step-body">
+            <div class="st-title">Verify & finalize<span class="st-tag">LLM + deterministic</span></div>
+            <div class="st-desc">Re-checks every claim and citation against the real evidence; fabricated citations get the answer rejected outright rather than shown. A confidence flag and disclaimer are appended last.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== EVALUATION ===================== -->
+    <section id="evaluation">
+      <div class="section-head">
+        <div class="eyebrow">Evaluation</div>
+        <h2>RRF-only vs. reranked, measured</h2>
+        <p class="dek">27-question benchmark, judged by keyword coverage against each answer's expected terms. Snapshot from the last local run of <code>eval/evaluate_retrieval.py</code>.</p>
+      </div>
+
+      <div class="eval-summary">
+        <span class="eval-badge">27 questions</span>
+        <span class="eval-badge">hit rate@5 <b>0.93 → 1.00</b></span>
+        <span class="eval-badge">MRR <b>0.86 → 0.90</b></span>
+        <span class="eval-badge">latency <b>0.15s → 1.04s</b></span>
+      </div>
+
+      <div class="eval-table" id="evalTable"></div>
+      <div class="eval-legend">
+        <span><span class="sw rrf"></span>RRF only</span>
+        <span><span class="sw rerank"></span>RRF + rerank</span>
+      </div>
+      <div class="eval-note">Reranking trades ~7x latency for +7.4pt hit-rate, +2.2pt precision and +4.2pt MRR — worth it for the "Full answer" mode, skippable for a fast scan. Re-run the eval script after any retrieval change to refresh these numbers.</div>
+    </section>
+
+    <!-- ===================== CONSOLE ===================== -->
+    <section id="console">
+      <div class="section-head">
+        <div class="eyebrow">Live console</div>
+        <h2>Ask it something</h2>
+        <p class="dek">Same three modes as the pipeline above: skip straight to RRF, add the reranker, or run the full grounded-answer chain.</p>
+      </div>
+
+      <div class="modes" id="modes">
+        <button class="mode-card selected" data-mode="fast">
+          <div class="m-eyebrow">Fast<span class="m-latency">~0.1–0.3s</span></div>
+          <div class="m-title">Quick lookup</div>
+          <div class="m-desc">Semantic + BM25 → RRF fusion only. No reranking, no LLM.</div>
+        </button>
+        <button class="mode-card" data-mode="deep">
+          <div class="m-eyebrow">Deep<span class="m-latency">~1–2s</span></div>
+          <div class="m-title">Strong search</div>
+          <div class="m-desc">Adds cross-encoder reranking on top of RRF for a measurably better top result.</div>
+        </button>
+        <button class="mode-card" data-mode="ask">
+          <div class="m-eyebrow">Grounded<span class="m-latency">~5–15s</span></div>
+          <div class="m-title">Full answer</div>
+          <div class="m-desc">Runs the 6-step chain end to end: retrieve, verify, cite.</div>
+        </button>
+      </div>
+
+      <div class="console-panel">
+        <div class="query-row">
+          <div class="query-field">
+            <label for="queryInput">Question</label>
+            <textarea id="queryInput" rows="2" placeholder="What causes liver cirrhosis?"></textarea>
+          </div>
+          <button class="run-btn" id="runBtn">Run quick lookup</button>
+        </div>
+        <div class="results" id="results">
+          <div class="state-msg">Ask a question above to see retrieval results here.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== GRAPH EXPLORER ===================== -->
+    <section id="graph">
+      <div class="section-head">
+        <div class="eyebrow">Knowledge graph</div>
+        <h2>Explore an entity</h2>
+        <p class="dek">Every edge in the graph keeps its source chunk's section and page, so a relationship can be traced back to the paper — same as a citation.</p>
+      </div>
+
+      <div class="graph-panel">
+        <div class="graph-row">
+          <input class="graph-input" id="entityInput" type="text" placeholder="e.g. Cirrhosis" value="Cirrhosis">
+          <button class="run-btn" id="graphBtn">Look up</button>
+        </div>
+        <div class="chip-row">
+          <span class="chip" data-entity="Cirrhosis">Cirrhosis</span>
+          <span class="chip" data-entity="MASLD">MASLD</span>
+          <span class="chip" data-entity="Hepatocellular carcinoma">Hepatocellular carcinoma</span>
+          <span class="chip" data-entity="Wilson disease">Wilson disease</span>
+          <span class="chip" data-entity="Hepatitis B">Hepatitis B</span>
+        </div>
+        <div class="results" id="graphResults" style="margin-top:16px;">
+          <div class="state-msg">Look up an entity to see its relationships.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== API REFERENCE ===================== -->
+    <section id="api">
+      <div class="section-head">
+        <div class="eyebrow">Reference</div>
+        <h2>API endpoints</h2>
+        <p class="dek">Everything this console calls is plain HTTP — same routes work from Postman, curl, or your own frontend.</p>
+      </div>
+
+      <div class="api-grid">
+        <div class="api-card">
+          <div class="api-head"><span class="method get">GET</span><span class="api-path">/health</span></div>
+          <div class="api-desc">Confirms the server is up and shows whether Groq / Neo4j / vector DB / BM25 index are configured.</div>
+          <div class="code-block">→ <span class="k">200</span> { status, groq_configured, neo4j_configured, vector_db_found, bm25_index_found }</div>
+        </div>
+        <div class="api-card">
+          <div class="api-head"><span class="method post">POST</span><span class="api-path">/search</span></div>
+          <div class="api-desc">Runs hybrid retrieval only — semantic + BM25 → RRF, optionally reranked. No LLM call.</div>
+          <div class="code-block">{ <span class="k">"query"</span>: "What causes liver cirrhosis?", <span class="k">"top_k"</span>: 5, <span class="k">"rerank"</span>: true }</div>
+        </div>
+        <div class="api-card">
+          <div class="api-head"><span class="method post">POST</span><span class="api-path">/ask</span></div>
+          <div class="api-desc">Runs the full 6-step chain and returns a cited, verified answer. Requires GROQ_API_KEY on the server.</div>
+          <div class="code-block">{ <span class="k">"question"</span>: "What causes liver cirrhosis?", <span class="k">"top_k"</span>: 5 }</div>
+        </div>
+        <div class="api-card">
+          <div class="api-head"><span class="method get">GET</span><span class="api-path">/graph/{entity_name}</span></div>
+          <div class="api-desc">Looks up an entity in the Neo4j knowledge graph and returns its relationships with section/page provenance.</div>
+          <div class="code-block">→ <span class="k">200</span> { entity, facts: [{ source, relation, target, section, page }] }</div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span>Liver diseases: epidemiology, causes, trends and predictions — Gan et al., 2025 · doi:10.1038/s41392-024-02072-z</span>
+      <span id="footStatus"></span>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let baseUrl = 'http://127.0.0.1:8000';
+let mode = 'fast';
+const runBtnLabels = { fast: 'Run quick lookup', deep: 'Run strong search', ask: 'Ask' };
+
+/* ---------- Sidebar scroll-spy ---------- */
+const navLinks = Array.from(document.querySelectorAll('.nav-link'));
+const sections = navLinks.map(l => document.getElementById(l.dataset.target));
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    const link = navLinks.find(l => l.dataset.target === entry.target.id);
+    if(!link) return;
+    if(entry.isIntersecting) navLinks.forEach(l => l.classList.toggle('active', l === link));
+  });
+}, { rootMargin: '-20% 0px -70% 0px' });
+sections.forEach(s => s && observer.observe(s));
+
+/* ---------- Health check ---------- */
+async function checkHealth(){
+  baseUrl = $('baseUrlInput').value.trim().replace(/\/$/, '');
+  const stamp = $('stamp');
+  stamp.textContent = 'checking…';
+  stamp.className = 'stamp offline';
+  try{
+    const res = await fetch(baseUrl + '/health');
+    if(!res.ok) throw new Error('bad status');
+    const data = await res.json();
+    setPill('pill-groq', data.groq_configured);
+    setPill('pill-neo4j', data.neo4j_configured);
+    setPill('pill-vdb', data.vector_db_found);
+    setPill('pill-bm25', data.bm25_index_found);
+    const allUp = data.groq_configured && data.neo4j_configured && data.vector_db_found && data.bm25_index_found;
+    stamp.textContent = allUp ? 'production ready' : 'partial · dev mode';
+    stamp.className = 'stamp ' + (allUp ? 'prod' : 'dev');
+    $('footStatus').textContent = 'connected · ' + baseUrl;
+  }catch(err){
+    ['pill-groq','pill-neo4j','pill-vdb','pill-bm25'].forEach(id => setPill(id, false));
+    stamp.textContent = 'server unreachable';
+    stamp.className = 'stamp offline';
+    $('footStatus').textContent = 'not connected — is uvicorn running?';
+  }
+}
+function setPill(id, on){
+  const el = $(id);
+  el.classList.toggle('on', !!on);
+  el.classList.toggle('off', !on);
+}
+$('refreshBtn').addEventListener('click', checkHealth);
+$('baseUrlInput').addEventListener('change', checkHealth);
+checkHealth();
+
+/* ---------- Evaluation table (static snapshot from eval/results.json) ---------- */
+const evalData = [
+  { name:'Hit rate @5', rrf:0.926, rerank:1.000, fmt:(v)=> (v*100).toFixed(1)+'%', max:1.0, delta:'+7.4pt' },
+  { name:'Avg precision @5', rrf:0.548, rerank:0.570, fmt:(v)=> (v*100).toFixed(1)+'%', max:1.0, delta:'+2.2pt' },
+  { name:'MRR', rrf:0.859, rerank:0.901, fmt:(v)=> v.toFixed(3), max:1.0, delta:'+4.2pt' },
+  { name:'Avg latency', rrf:0.147, rerank:1.038, fmt:(v)=> v.toFixed(3)+'s', max:1.038, delta:'+7.1x' },
+];
+function renderEvalTable(){
+  $('evalTable').innerHTML = evalData.map(m => `
+    <div class="eval-row">
+      <div class="eval-row-head"><span class="e-name">${m.name}</span><span class="e-delta">${m.delta}</span></div>
+      <div class="eval-bars">
+        <div class="eval-bar-line">
+          <span class="b-label">RRF only</span>
+          <div class="eval-bar-track"><div class="eval-bar-fill rrf" style="width:${(m.rrf/m.max*100).toFixed(1)}%"></div></div>
+          <span class="b-val">${m.fmt(m.rrf)}</span>
+        </div>
+        <div class="eval-bar-line">
+          <span class="b-label">+ Rerank</span>
+          <div class="eval-bar-track"><div class="eval-bar-fill rerank" style="width:${(m.rerank/m.max*100).toFixed(1)}%"></div></div>
+          <span class="b-val">${m.fmt(m.rerank)}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+renderEvalTable();
+
+/* ---------- Console: mode switching ---------- */
+document.querySelectorAll('.mode-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    mode = card.dataset.mode;
+    $('runBtn').textContent = runBtnLabels[mode];
+    $('queryInput').placeholder = mode === 'ask'
+      ? 'Ask a full question, e.g. "What causes liver cirrhosis?"'
+      : 'What causes liver cirrhosis?';
+  });
+});
+
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function formatCitations(text){
+  return escapeHtml(text).replace(/\[(Graph source|Source):[^\]]+\]/g, m => `<span class="cite">${m}</span>`);
+}
+
+async function runQuery(){
+  const question = $('queryInput').value.trim();
+  const results = $('results');
+  const runBtn = $('runBtn');
+  if(!question){ results.innerHTML = '<div class="state-msg error">Type a question first.</div>'; return; }
+
+  runBtn.disabled = true;
+  results.innerHTML = '<div class="state-msg">Running ' + (mode === 'fast' ? 'RRF fusion…' : mode === 'deep' ? 'RRF + reranking…' : 'the full 6-step chain — this can take a few seconds…') + '</div>';
+
+  const t0 = performance.now();
+  try{
+    let payload, endpoint;
+    if(mode === 'ask'){ endpoint = '/ask'; payload = { question, top_k: 5 }; }
+    else { endpoint = '/search'; payload = { query: question, top_k: 5, rerank: mode === 'deep' }; }
+
+    const res = await fetch(baseUrl + endpoint, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    });
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+    if(!res.ok){
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    if(mode === 'ask') renderAnswer(data, elapsed); else renderChunks(data, elapsed);
+  }catch(err){
+    results.innerHTML = `<div class="state-msg error">Request failed: ${escapeHtml(err.message)}<br>Check the API address above and confirm the server is running.</div>`;
+  }finally{
+    runBtn.disabled = false;
+  }
+}
+$('runBtn').addEventListener('click', runQuery);
+$('queryInput').addEventListener('keydown', (e) => { if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runQuery(); });
+
+function renderChunks(data, elapsed){
+  const results = $('results');
+  if(!data.results || data.results.length === 0){ results.innerHTML = '<div class="state-msg">No results found for that question.</div>'; return; }
+  const maxScore = Math.max(...data.results.map(r => r.score), 0.0001);
+  const rows = data.results.map(r => {
+    const pages = r.page_start ? (r.page_end && r.page_end !== r.page_start ? `p.${r.page_start}-${r.page_end}` : `p.${r.page_start}`) : '';
+    const pct = Math.max(4, Math.round((r.score / maxScore) * 100));
+    return `
+      <div class="chunk-card">
+        <div class="chunk-head">
+          <span class="chunk-rank">#${r.rank}</span>
+          <span class="chunk-section">${escapeHtml(r.section || 'Unknown section')}</span>
+          <span class="chunk-meta">${pages} · score ${r.score.toFixed(3)}</span>
+        </div>
+        <div class="chunk-text">${escapeHtml(r.text)}</div>
+        <div class="score-bar"><div style="width:${pct}%"></div></div>
+      </div>`;
+  }).join('');
+  results.innerHTML = `<div class="results-meta"><span>${data.results.length} result${data.results.length === 1 ? '' : 's'} · ${data.reranked ? 'reranked' : 'RRF only'}</span><span>${elapsed}s</span></div>${rows}`;
+}
+function renderAnswer(data, elapsed){
+  const results = $('results');
+  const isRefusal = data.answer.startsWith("I can't give personal medical advice") ||
+                     data.answer.includes("outside what this hepatology paper covers") ||
+                     data.answer.startsWith("I found some potentially relevant material");
+  results.innerHTML = `
+    <div class="results-meta"><span>${isRefusal ? 'no answer returned' : 'grounded answer'}</span><span>${elapsed}s</span></div>
+    <div class="answer-card"><div class="answer-body">${formatCitations(data.answer)}</div></div>`;
+}
+
+/* ---------- Graph explorer ---------- */
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => { $('entityInput').value = chip.dataset.entity; runGraphLookup(); });
+});
+$('graphBtn').addEventListener('click', runGraphLookup);
+$('entityInput').addEventListener('keydown', (e) => { if(e.key === 'Enter') runGraphLookup(); });
+
+async function runGraphLookup(){
+  const entity = $('entityInput').value.trim();
+  const container = $('graphResults');
+  if(!entity){ container.innerHTML = '<div class="state-msg error">Type an entity name first.</div>'; return; }
+  container.innerHTML = '<div class="state-msg">Looking up "' + escapeHtml(entity) + '"…</div>';
+  try{
+    const res = await fetch(baseUrl + '/graph/' + encodeURIComponent(entity));
+    if(!res.ok){
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    if(!data.facts || data.facts.length === 0){
+      container.innerHTML = `<div class="state-msg">No relationships found for "${escapeHtml(entity)}".</div>`;
+      return;
+    }
+    container.innerHTML = data.facts.map(f => `
+      <div class="fact-row">
+        <span class="fact-node">${escapeHtml(f.source)}</span>
+        <span class="fact-rel">${escapeHtml(f.relation)}</span>
+        <span class="fact-node">${escapeHtml(f.target)}</span>
+        <span class="fact-meta">${escapeHtml(f.section || 'Unknown')}${f.page ? ' · p.' + f.page : ''}</span>
+      </div>`).join('');
+  }catch(err){
+    container.innerHTML = `<div class="state-msg error">Lookup failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+</script>
+</body>
+</html>

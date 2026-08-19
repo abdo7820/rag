@@ -1,0 +1,280 @@
+[
+  {
+    "chunk_id": 0,
+    "section": "Introduction",
+    "page_start": 1,
+    "page_end": 1,
+    "doi": "10.1038/s41392-024-02072-z",
+    "entities": [
+      {
+        "name": "Viruses",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Alcohol",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Metabolites",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Toxins",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Pathogenic agents",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Liver disease",
+        "type": "DISEASE"
+      },
+      {
+        "name": "End-stage liver disease",
+        "type": "DISEASE"
+      }
+    ],
+    "relationships": [
+      {
+        "source": "Viruses",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Alcohol",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Metabolites",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Toxins",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Pathogenic agents",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "PROGRESSES_TO",
+        "target": "End-stage liver disease"
+      }
+    ]
+  },
+  {
+    "chunk_id": 1,
+    "section": "INTRODUCTION",
+    "page_start": 1,
+    "page_end": 1,
+    "doi": "10.1038/s41392-024-02072-z",
+    "entities": [],
+    "relationships": []
+  },
+  {
+    "chunk_id": 2,
+    "section": "INTRODUCTION",
+    "page_start": 1,
+    "page_end": 1,
+    "doi": "10.1038/s41392-024-02072-z",
+    "entities": [
+      {
+        "name": "Liver disease",
+        "type": "DISEASE"
+      },
+      {
+        "name": "Cirrhosis",
+        "type": "DISEASE"
+      },
+      {
+        "name": "Ethanol",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Viruses",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "Hepatocyte protection",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "Cause elimination",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "Symptom alleviation",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "Biomarkers",
+        "type": "BIOMARKER"
+      },
+      {
+        "name": "Liver biopsy",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "Digestive symptoms",
+        "type": "SYMPTOM"
+      }
+    ],
+    "relationships": [
+      {
+        "source": "Ethanol",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Viruses",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "PROGRESSES_TO",
+        "target": "Cirrhosis"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_SYMPTOM",
+        "target": "Digestive symptoms"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_BIOMARKER",
+        "target": "Biomarkers"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_DIAGNOSTIC",
+        "target": "Liver biopsy"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_TREATMENT",
+        "target": "Hepatocyte protection"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_TREATMENT",
+        "target": "Cause elimination"
+      },
+      {
+        "source": "Liver disease",
+        "relation": "HAS_TREATMENT",
+        "target": "Symptom alleviation"
+      }
+    ]
+  },
+  {
+    "chunk_id": 3,
+    "section": "INTRODUCTION",
+    "page_start": 1,
+    "page_end": 1,
+    "doi": "10.1038/s41392-024-02072-z",
+    "entities": [],
+    "relationships": []
+  },
+  {
+    "chunk_id": 4,
+    "section": "Global morbidity",
+    "page_start": 1,
+    "page_end": 1,
+    "doi": "10.1038/s41392-024-02072-z",
+    "entities": [
+      {
+        "name": "Liver disease",
+        "type": "DISEASE"
+      },
+      {
+        "name": "MASLD",
+        "type": "DISEASE"
+      },
+      {
+        "name": "ALD",
+        "type": "DISEASE"
+      },
+      {
+        "name": "obesity",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "alcohol consumption",
+        "type": "RISK_FACTOR"
+      },
+      {
+        "name": "HBV",
+        "type": "DISEASE"
+      },
+      {
+        "name": "HCV",
+        "type": "DISEASE"
+      },
+      {
+        "name": "chronic liver diseases",
+        "type": "DISEASE"
+      },
+      {
+        "name": "vaccination",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "screening protocols for blood and organ donors",
+        "type": "TREATMENT"
+      },
+      {
+        "name": "global adult population",
+        "type": "POPULATION"
+      },
+      {
+        "name": "United States",
+        "type": "ORGANIZATION"
+      },
+      {
+        "name": "United Kingdom",
+        "type": "ORGANIZATION"
+      },
+      {
+        "name": "South Korea",
+        "type": "ORGANIZATION"
+      },
+      {
+        "name": "China",
+        "type": "ORGANIZATION"
+      },
+      {
+        "name": "patients with chronic liver diseases",
+        "type": "POPULATION"
+      }
+    ],
+    "relationships": [
+      {
+        "source": "obesity",
+        "relation": "INCREASES_RISK_OF",
+        "target": "Liver disease"
+      },
+      {
+        "source": "alcohol consumption",
+        "relation": "INCREASES_RISK_OF",
+        "target": "ALD"
+      },
+      {
+        "source": "vaccination",
+        "relation": "REDUCES_RISK_OF",
+        "target": "HBV"
+      },
+      {
+        "source": "vaccination",
+        "relation": "REDUCES_RISK_OF",
+        "target": "HCV"
+      }
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "_comment": "Each question has expected_keywords: terms that MUST appear (case-insensitive) in a chunk for it to count as a relevant/correct retrieval. Keywords are phrased loosely on purpose so the dataset still works if chunking/wording shifts slightly between paper extractions.",
+  "questions": [
+    {"id": 1, "question": "What is the global mortality burden of liver disease?", "expected_keywords": ["million", "deaths", "liver disease"]},
+    {"id": 2, "question": "What causes liver cirrhosis?", "expected_keywords": ["MASLD", "HBV", "HCV", "cirrhosis"]},
+    {"id": 3, "question": "What is the global prevalence of MASLD?", "expected_keywords": ["MASLD", "prevalence"]},
+    {"id": 4, "question": "How is drug-induced liver injury (DILI) diagnosed?", "expected_keywords": ["DILI", "diagnos"]},
+    {"id": 5, "question": "What are the main risk factors for alcohol-associated liver disease (ALD)?", "expected_keywords": ["alcohol", "ALD"]},
+    {"id": 6, "question": "What is the treatment approach for chronic hepatitis B?", "expected_keywords": ["hepatitis B", "HBV", "antiviral"]},
+    {"id": 7, "question": "What direct-acting antivirals are used for hepatitis C?", "expected_keywords": ["HCV", "DAA"]},
+    {"id": 8, "question": "What is the clinical presentation of autoimmune hepatitis (AIH)?", "expected_keywords": ["AIH", "autoimmune hepatitis"]},
+    {"id": 9, "question": "How is primary biliary cholangitis (PBC) diagnosed?", "expected_keywords": ["PBC", "biliary cholangitis"]},
+    {"id": 10, "question": "What is the association between primary sclerosing cholangitis (PSC) and inflammatory bowel disease?", "expected_keywords": ["PSC", "sclerosing cholangitis"]},
+    {"id": 11, "question": "What gene mutation causes Wilson disease?", "expected_keywords": ["Wilson", "ATP7B", "copper"]},
+    {"id": 12, "question": "What is alpha-1 antitrypsin deficiency (AATD)?", "expected_keywords": ["antitrypsin", "AATD"]},
+    {"id": 13, "question": "What is the Barcelona Clinic Liver Cancer (BCLC) staging system used for?", "expected_keywords": ["BCLC", "hepatocellular carcinoma", "HCC"]},
+    {"id": 14, "question": "What are the treatment options for hepatocellular carcinoma (HCC)?", "expected_keywords": ["HCC", "hepatocellular carcinoma"]},
+    {"id": 15, "question": "What is the role of AMPK signaling in liver disease?", "expected_keywords": ["AMPK"]},
+    {"id": 16, "question": "How does RIG-1/MAVS signaling contribute to antiviral defense in the liver?", "expected_keywords": ["RIG-1", "MAVS"]},
+    {"id": 17, "question": "What is the role of the cGAS/STING pathway in liver injury?", "expected_keywords": ["cGAS", "STING"]},
+    {"id": 18, "question": "How does the gut-liver-brain axis contribute to liver disease progression?", "expected_keywords": ["gut", "liver", "brain"]},
+    {"id": 19, "question": "What is the role of hepatic stellate cells (HSCs) in liver fibrosis?", "expected_keywords": ["hepatic stellate cell", "HSC", "fibrosis"]},
+    {"id": 20, "question": "What is the role of Kupffer cells and macrophages in liver inflammation?", "expected_keywords": ["Kupffer", "macrophage"]},
+    {"id": 21, "question": "What non-invasive tests are used to assess liver fibrosis severity?", "expected_keywords": ["elastography", "fibrosis"]},
+    {"id": 22, "question": "What is the Child-Pugh classification used for?", "expected_keywords": ["Child-Pugh", "cirrhosis"]},
+    {"id": 23, "question": "What complications arise from decompensated cirrhosis?", "expected_keywords": ["ascites", "encephalopathy", "decompensated"]},
+    {"id": 24, "question": "What is the epidemiology of cholangiocarcinoma (CCA)?", "expected_keywords": ["cholangiocarcinoma", "CCA"]},
+    {"id": 25, "question": "What role does TGF-beta signaling play in liver fibrosis?", "expected_keywords": ["TGF-", "fibrosis"]},
+    {"id": 26, "question": "What vaccines exist for preventing hepatitis A and B?", "expected_keywords": ["vaccin", "hepatitis"]},
+    {"id": 27, "question": "What is the significance of alpha-fetoprotein (AFP) in HCC surveillance?", "expected_keywords": ["alpha-fetoprotein", "AFP", "HCC"]}
+  ]
+}
