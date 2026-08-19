@@ -1385,15 +1385,51 @@ def verify_answer(
 # Citation validation
 # ==========================================================================
 
+def _normalize_citation_key(
+    kind: str,
+    section: str,
+    page: str,
+) -> tuple[str, str, str]:
+    """
+    Normalize a citation key so trivial formatting differences
+    (case, extra whitespace, "p.5" vs "p. 5", "5-6" vs "5–6")
+    don't cause a valid citation to be rejected.
+    """
+
+    kind_norm = (
+        kind.strip().lower()
+    )
+
+    section_norm = re.sub(
+        r"\s+",
+        " ",
+        section.strip().lower(),
+    )
+
+    page_norm = (
+        page.strip()
+        .lower()
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace(" ", "")
+    )
+
+    return (
+        kind_norm,
+        section_norm,
+        page_norm,
+    )
+
+
 def _extract_citations(
     text: str,
 ) -> list[tuple[str, str, str]]:
 
     return [
-        (
-            kind.strip(),
-            section.strip(),
-            page.strip(),
+        _normalize_citation_key(
+            kind,
+            section,
+            page,
         )
         for kind, section, page
         in CITATION_RE.findall(
@@ -1434,7 +1470,7 @@ def _valid_citation_keys(
         ).strip()
 
         valid.add(
-            (
+            _normalize_citation_key(
                 "Source",
                 section,
                 page,
@@ -1458,7 +1494,7 @@ def _valid_citation_keys(
         ).strip()
 
         valid.add(
-            (
+            _normalize_citation_key(
                 "Graph source",
                 section,
                 page,
