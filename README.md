@@ -227,8 +227,9 @@ This makes the retrieval stage more robust because a document can be highly rele
 ---
 
 # 🧠 5. Knowledge Graph
+<img width="1064" height="625" alt="visualisation" src="https://github.com/user-attachments/assets/4352075f-8dda-4d13-8f1c-9ad62a79d6bb" />
 
-![Uploading visualisation.png…]()
+
 
 The system also extracts entities and relationships from the source document.
 
