@@ -82,6 +82,8 @@ from fastapi import (
     HTTPException,
 )
 
+from fastapi.responses import FileResponse
+
 from fastapi.middleware.cors import (
     CORSMiddleware,
 )
@@ -357,6 +359,28 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan,
 )
+
+
+# ==========================================================================
+# Production dashboard
+# ==========================================================================
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    """Serve the production web interface at the root URL."""
+
+    dashboard_path = PROJECT_ROOT / "dashboard.html"
+
+    if not dashboard_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="dashboard.html not found.",
+        )
+
+    return FileResponse(
+        path=str(dashboard_path),
+        media_type="text/html",
+    )
 
 
 # ==========================================================================
