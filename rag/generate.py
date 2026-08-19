@@ -1141,11 +1141,21 @@ GROUNDING RULES
     an entity.
 
 12. If the evidence only partially answers the question, answer only
-    the supported portion.
+    the supported portion — a partial, ranged, or regionally-varying
+    figure (e.g. "38.0% globally between 2016-2019, with regional
+    variation from X% to Y%") STILL counts as answering the question.
+    Do not treat "the evidence gives a range/trend instead of one
+    single fixed number" as a reason to refuse.
 
-13. If the evidence does not contain the answer, output EXACTLY:
+13. Only output the exact refusal below if the evidence is genuinely
+    unrelated to the question or contains nothing that addresses it
+    at all:
 
 I don't know based on the available sources.
+
+    Do NOT use this refusal just because the answer is a range, an
+    estimate, drawn from multiple sub-populations, or otherwise not a
+    single clean number. Give the best supported answer instead.
 
 14. Be concise but complete.
 
@@ -1196,7 +1206,7 @@ def draft_answer(
             },
         ],
         temperature=0,
-        reasoning_effort="low",
+        reasoning_effort="medium",
         max_completion_tokens=2000,
     )
 
@@ -1298,7 +1308,14 @@ If the draft is fully supported, return the corrected final answer.
 
 If unsupported material exists, remove or correct only that material.
 
-If nothing remains supported, output exactly:
+A partial, ranged, or regionally-varying figure that IS supported by
+the evidence (e.g. "38.0% globally between 2016-2019, ranging
+regionally from X% to Y%") counts as a valid, complete answer. Do not
+discard a supported draft just because it reports a range or trend
+instead of one single fixed number.
+
+Only if NOTHING in the draft remains supported by the evidence after
+removing unsupported claims, output exactly:
 
 I don't know based on the available sources.
 
@@ -1376,7 +1393,7 @@ def verify_answer(
             }
         ],
         temperature=0,
-        reasoning_effort="low",
+        reasoning_effort="medium",
         max_completion_tokens=2500,
     )
 
@@ -1868,6 +1885,11 @@ def answer_question(
             f"{time.time() - t0:.2f}s"
         )
 
+        print(
+            "[DEBUG] Draft answer:\n"
+            f"{draft}"
+        )
+
         # --------------------------------------------------------------
         # Step 6 — Verification
         # --------------------------------------------------------------
@@ -1885,6 +1907,11 @@ def answer_question(
         print(
             f"[TIMING] verify_answer: "
             f"{time.time() - t0:.2f}s"
+        )
+
+        print(
+            "[DEBUG] Verified answer:\n"
+            f"{verified}"
         )
 
     except GenerationError as exc:
