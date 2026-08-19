@@ -350,10 +350,49 @@ def rewrite_query(
 # Step 2 — Hybrid Retrieval
 # ==========================================================================
 
+def _dedupe_chunks(chunks: list[dict]) -> list[dict]:
+    """
+    Dedupe chunks by chunk id / (section, page, text) when fusing results
+    from two separate retrieval passes (original + rewritten query).
+    """
+
+    seen = set()
+    deduped = []
+
+    for c in chunks:
+
+        key = (
+            c.get("id")
+            or c.get("chunk_id")
+            or (
+                (c.get("metadata") or {}).get("section"),
+                (c.get("metadata") or {}).get("page_start"),
+                c.get("text", "")[:80],
+            )
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        deduped.append(c)
+
+    return deduped
+
+
 def retrieve_chunks(
     query: str,
     top_k: int = RETRIEVAL_TOP_K,
+    extra_query: str | None = None,
 ) -> list[dict]:
+    """
+    Retrieve chunks for `query`. If `extra_query` is given (and differs
+    from `query`), ALSO retrieve for it and fuse both result sets before
+    reranking. This matters because an LLM-rewritten search query can
+    drift away from the user's exact wording and miss the single best
+    passage — running both and letting RRF/rerank sort it out is safer
+    than trusting the rewrite alone.
+    """
 
     semantic_results = (
         semantic_search(query)
@@ -363,6 +402,11 @@ def retrieve_chunks(
         bm25_search(query)
     )
 
+    if extra_query and extra_query.strip().lower() != query.strip().lower():
+
+        semantic_results = semantic_results + semantic_search(extra_query)
+        bm25_results = bm25_results + bm25_search(extra_query)
+
     fused = reciprocal_rank_fusion(
         semantic_results,
         bm25_results,
@@ -371,6 +415,8 @@ def retrieve_chunks(
     if not fused:
 
         return []
+
+    fused = _dedupe_chunks(fused)
 
     reranked = rerank_results(
         query,
@@ -610,10 +656,6 @@ def _graph_fact_relevance(
 
     score = 0
 
-    # --------------------------------------------------------------
-    # Entity directly mentioned in question
-    # --------------------------------------------------------------
-
     if source and re.search(
         r"\b"
         + re.escape(source)
@@ -632,10 +674,6 @@ def _graph_fact_relevance(
 
         score += 4
 
-    # --------------------------------------------------------------
-    # Relation overlap
-    # --------------------------------------------------------------
-
     relation_tokens = set(
         re.findall(
             r"\b[a-zA-Z]{3,}\b",
@@ -651,10 +689,6 @@ def _graph_fact_relevance(
     if overlap:
 
         score += 2
-
-    # --------------------------------------------------------------
-    # Useful section
-    # --------------------------------------------------------------
 
     useful_section_words = {
         "cause",
@@ -682,10 +716,6 @@ def _graph_fact_relevance(
     ):
 
         score += 1
-
-    # --------------------------------------------------------------
-    # Penalize generic reference sections
-    # --------------------------------------------------------------
 
     if "reference" in section:
 
@@ -826,7 +856,6 @@ def retrieve_graph_facts(
             reverse=True,
         )
 
-        # Only keep actually relevant facts.
         relevant = [
             fact
             for score, fact in scored
@@ -1303,6 +1332,8 @@ STYLE
 - Do not add unsupported explanations.
 - Do not add medical advice.
 - Do not mention this verification process.
+- Use ONLY plain ASCII square brackets "[" and "]" for every citation —
+  never curly/full-width brackets, never any other bracket character.
 
 If the draft is fully supported, return the corrected final answer.
 
@@ -1402,9 +1433,31 @@ def verify_answer(
 # Citation validation
 # ==========================================================================
 
+def _normalize_brackets(text: str) -> str:
+    """
+    Some models occasionally emit full-width/curly bracket look-alikes
+    (e.g. "【" "】") instead of plain ASCII "[" "]" for citations, despite
+    being told to use ASCII brackets. Normalize them before matching so
+    a formatting quirk doesn't get treated as "no citations found" (which
+    would silently disable citation verification for that answer).
+    """
+
+    return (
+        text
+        .replace("【", "[")
+        .replace("】", "]")
+        .replace("〔", "[")
+        .replace("〕", "]")
+        .replace("［", "[")
+        .replace("］", "]")
+    )
+
+
 def _extract_citations(
     text: str,
 ) -> list[tuple[str, str, str]]:
+
+    text = _normalize_brackets(text)
 
     return [
         (
@@ -1437,22 +1490,18 @@ def _normalize_citation_key(
 
     section_norm = section.strip().lower()
 
-    # Strip leading numbering like "1. ", "2) ", "3 - " etc.
     section_norm = re.sub(
         r"^\d+[\.\)\-]\s*",
         "",
         section_norm,
     )
 
-    # Collapse internal whitespace.
     section_norm = re.sub(
         r"\s+",
         " ",
         section_norm,
     ).strip()
 
-    # Keep only alphanumerics/hyphens for page comparison
-    # (handles "p.12", "12 ", "12-13", etc. consistently).
     page_norm = re.sub(
         r"[^\w\-]",
         "",
@@ -1671,10 +1720,6 @@ def answer_question(
     top_k: int = RETRIEVAL_TOP_K,
 ) -> str:
 
-    # ----------------------------------------------------------------------
-    # Medical guardrail
-    # ----------------------------------------------------------------------
-
     if is_blocked(query):
 
         return (
@@ -1685,10 +1730,6 @@ def answer_question(
         )
 
     t_start = time.time()
-
-    # ----------------------------------------------------------------------
-    # Step 1 — Rewrite
-    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
@@ -1703,30 +1744,35 @@ def answer_question(
     )
 
     print(
-        f"[DEBUG] Search query: "
-        f"{search_query}"
+        f"[DEBUG] Original question: {query}"
     )
 
-    # ----------------------------------------------------------------------
-    # Step 2 — Hybrid retrieval + Reranking
-    # ----------------------------------------------------------------------
+    print(
+        f"[DEBUG] Rewritten search query: {search_query}"
+    )
 
     t0 = time.time()
 
+    # IMPORTANT: retrieve using BOTH the rewritten query AND the user's
+    # original wording, then fuse. An LLM query rewrite can drift away
+    # from specific phrasing (e.g. "prevalence") that the original
+    # question already matched extremely well — relying on the rewrite
+    # alone can silently lose the single best passage. See generate.py
+    # incident 2026-08: MASLD prevalence question retrieved only
+    # tangential MASLD/cirrhosis chunks after rewrite, despite the raw
+    # question retrieving the correct 38.0%-prevalence passage as the
+    # #1 result with score 0.881.
     chunks = retrieve_chunks(
         search_query,
         top_k=top_k,
+        extra_query=query,
     )
 
     print(
         f"[TIMING] retrieve_chunks "
-        f"(semantic+bm25+rrf+rerank): "
+        f"(semantic+bm25+rrf+rerank, fused with original query): "
         f"{time.time() - t0:.2f}s"
     )
-
-    # ----------------------------------------------------------------------
-    # Step 3 — Graph retrieval
-    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
@@ -1778,10 +1824,6 @@ def answer_question(
                 f"(section={section}, p.{page})"
             )
 
-    # ----------------------------------------------------------------------
-    # No evidence
-    # ----------------------------------------------------------------------
-
     if not chunks and not graph_facts:
 
         return (
@@ -1789,18 +1831,10 @@ def answer_question(
             + DISCLAIMER
         )
 
-    # ----------------------------------------------------------------------
-    # Build context
-    # ----------------------------------------------------------------------
-
     context = build_full_context(
         chunks,
         graph_facts,
     )
-
-    # ----------------------------------------------------------------------
-    # Confidence
-    # ----------------------------------------------------------------------
 
     retrieval_confidence = (
         _get_retrieval_confidence(
@@ -1829,10 +1863,6 @@ def answer_question(
             "[DEBUG] Jina scores: "
             f"{[round(float(s), 4) for s in scores]}"
         )
-
-    # ----------------------------------------------------------------------
-    # Step 4 — Scope
-    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
@@ -1866,10 +1896,6 @@ def answer_question(
             + DISCLAIMER
         )
 
-    # ----------------------------------------------------------------------
-    # Step 5 — Draft
-    # ----------------------------------------------------------------------
-
     try:
 
         t0 = time.time()
@@ -1889,10 +1915,6 @@ def answer_question(
             "[DEBUG] Draft answer:\n"
             f"{draft}"
         )
-
-        # --------------------------------------------------------------
-        # Step 6 — Verification
-        # --------------------------------------------------------------
 
         t0 = time.time()
 
@@ -1925,10 +1947,6 @@ def answer_question(
             UNVERIFIED_TEXT
             + DISCLAIMER
         )
-
-    # ----------------------------------------------------------------------
-    # Citation validation
-    # ----------------------------------------------------------------------
 
     if not has_only_verifiable_citations(
         verified,
@@ -1992,10 +2010,6 @@ def answer_question(
             UNVERIFIED_TEXT
             + DISCLAIMER
         )
-
-    # ----------------------------------------------------------------------
-    # Final answer
-    # ----------------------------------------------------------------------
 
     print(
         f"[TIMING] TOTAL "
