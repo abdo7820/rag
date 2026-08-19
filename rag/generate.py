@@ -1,17 +1,17 @@
 """
 rag/generate.py
 
-A 6-step prompt chain that turns a question into a grounded, cited answer,
-pulling evidence from BOTH the vector/BM25 index and the Neo4j graph.
+A 6-step grounded-answer chain that turns a question into a grounded,
+cited answer, pulling evidence from BOTH the vector/BM25 index and
+the Neo4j graph.
 
 Railway / low-RAM mode:
 - No torch import
 - No sentence-transformers import at module startup
 - Embedding + reranking are handled by rag/test_search.py
-  through Hugging Face Inference API when USE_HF_INFERENCE_API=true.
-
-Run:
-    python rag/generate.py "What causes liver cirrhosis?"
+- When USE_HF_INFERENCE_API=true:
+    - Embedding -> Hugging Face
+    - Reranking -> Jina API
 """
 
 import os
@@ -25,9 +25,28 @@ from groq import Groq
 from neo4j import GraphDatabase
 
 
-BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR / "rag"))
-sys.path.insert(0, str(BASE_DIR))
+# ==========================================================================
+# Paths
+# ==========================================================================
+
+BASE_DIR = pathlib.Path(
+    __file__
+).resolve().parent.parent
+
+sys.path.insert(
+    0,
+    str(BASE_DIR / "rag"),
+)
+
+sys.path.insert(
+    0,
+    str(BASE_DIR),
+)
+
+
+# ==========================================================================
+# Retrieval
+# ==========================================================================
 
 from test_search import (  # noqa: E402
     semantic_search,
@@ -35,6 +54,11 @@ from test_search import (  # noqa: E402
     reciprocal_rank_fusion,
     rerank_results,
 )
+
+
+# ==========================================================================
+# Configuration
+# ==========================================================================
 
 from config import (  # noqa: E402
     GENERATION_MODEL_NAME as MODEL_NAME,
@@ -47,27 +71,36 @@ from config import (  # noqa: E402
 )
 
 
-# NOTE:
-# llama-3.3-70b-versatile / llama-3.1-8b-instant are deprecated on Groq.
-# Use the model configured in config.py.
+# ==========================================================================
+# Constants
+# ==========================================================================
 
-NOT_FOUND_TEXT = "I don't know based on the available sources."
+NOT_FOUND_TEXT = (
+    "I don't know based on the available sources."
+)
 
 OUT_OF_SCOPE_TEXT = (
-    "That's outside what this hepatology paper covers, so I can't answer it "
-    "from these sources."
+    "That's outside what this hepatology paper covers, "
+    "so I can't answer it from these sources."
 )
 
 UNVERIFIED_TEXT = (
-    "I found some potentially relevant material, but I couldn't confirm the "
-    "answer was fully backed by a citation I could verify, so I'm not "
-    "showing it rather than risk giving you an unsupported claim. Please "
-    "try rephrasing the question or asking again."
+    "I found some potentially relevant material, but I couldn't "
+    "confirm the answer was fully backed by a citation I could "
+    "verify, so I'm not showing it rather than risk giving you "
+    "an unsupported claim. Please try rephrasing the question "
+    "or asking again."
 )
 
 
+# Citation format:
+#
+# [Source: section, p.7]
+# [Graph source: section, p.1]
+#
 CITATION_RE = re.compile(
-    r"\[(Graph source|Source):\s*([^,\]]+?)\s*,\s*p\.\s*([\w\-]+)\s*\]"
+    r"\[(Graph source|Source):\s*([^,\]]+?)"
+    r",\s*p\.\s*([\w\-]+)\s*\]"
 )
 
 
@@ -75,52 +108,89 @@ class GenerationError(RuntimeError):
     """Raised when a required LLM generation step fails."""
 
 
-# ============================================================
-# Step 1 — Guardrail
-# ============================================================
+# ==========================================================================
+# Medical guardrail
+# ==========================================================================
 
 BLOCKED_PATTERNS = re.compile(
-    r"\b(dosage|dose|prescri\w*|should i take|how much .*(should|do i) take|"
-    r"is it safe for me|diagnose me|do i have)\b",
+    r"\b("
+    r"dosage|dose|prescri\w*|"
+    r"should i take|"
+    r"how much .*(should|do i) take|"
+    r"is it safe for me|"
+    r"diagnose me|"
+    r"do i have"
+    r")\b",
     re.IGNORECASE,
 )
 
 
 DISCLAIMER = (
     "\n\n---\n"
-    "*This is educational information drawn from a research paper, not "
-    "medical advice. Please consult a qualified healthcare professional "
-    "for any personal medical decisions.*"
+    "*This is educational information drawn from a research paper, "
+    "not medical advice. Please consult a qualified healthcare "
+    "professional for any personal medical decisions.*"
 )
 
 
-# ============================================================
+# ==========================================================================
 # Groq helpers
-# ============================================================
+# ==========================================================================
 
-def _create_completion(client: Groq, **kwargs):
+def _create_completion(
+    client: Groq,
+    **kwargs,
+):
     """
-    Creates a Groq completion while handling compatibility differences
-    between Groq SDK/model parameter versions.
+    Creates a Groq completion while handling compatibility
+    differences between Groq SDK/model parameter versions.
     """
+
     try:
-        return client.chat.completions.create(**kwargs)
+
+        return client.chat.completions.create(
+            **kwargs
+        )
 
     except TypeError as exc:
 
         if "reasoning_effort" in str(exc):
-            kwargs.pop("reasoning_effort", None)
-            return _create_completion(client, **kwargs)
+
+            kwargs.pop(
+                "reasoning_effort",
+                None,
+            )
+
+            return _create_completion(
+                client,
+                **kwargs,
+            )
 
         if "max_completion_tokens" in str(exc):
-            kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
-            return _create_completion(client, **kwargs)
+
+            kwargs["max_tokens"] = (
+                kwargs.pop(
+                    "max_completion_tokens"
+                )
+            )
+
+            return _create_completion(
+                client,
+                **kwargs,
+            )
 
         raise
 
 
-def is_blocked(question: str) -> bool:
-    return bool(BLOCKED_PATTERNS.search(question))
+def is_blocked(
+    question: str,
+) -> bool:
+
+    return bool(
+        BLOCKED_PATTERNS.search(
+            question
+        )
+    )
 
 
 def _create_completion_with_retry(
@@ -130,67 +200,95 @@ def _create_completion_with_retry(
     **kwargs,
 ) -> str:
 
-    last_error: Exception | None = None
+    last_error = None
 
-    for attempt in range(1, GENERATION_MAX_RETRIES + 1):
+    for attempt in range(
+        1,
+        GENERATION_MAX_RETRIES + 1,
+    ):
 
         try:
-            response = _create_completion(client, **kwargs)
+
+            response = _create_completion(
+                client,
+                **kwargs,
+            )
 
             text = (
-                response.choices[0].message.content or ""
+                response
+                .choices[0]
+                .message
+                .content
+                or ""
             ).strip()
 
             if text:
+
                 return text
 
             last_error = RuntimeError(
-                f"{step_name}: model returned an empty response"
+                f"{step_name}: model returned "
+                "an empty response"
             )
 
         except Exception as exc:
+
             last_error = exc
 
             print(
                 f"[DEBUG] {step_name} "
-                f"attempt {attempt}/{GENERATION_MAX_RETRIES} "
+                f"attempt {attempt}/"
+                f"{GENERATION_MAX_RETRIES} "
                 f"failed: {exc!r}"
             )
 
         if attempt < GENERATION_MAX_RETRIES:
+
             time.sleep(
-                GENERATION_RETRY_BACKOFF_S * attempt
+                GENERATION_RETRY_BACKOFF_S
+                * attempt
             )
 
     raise GenerationError(
         f"{step_name} failed after "
-        f"{GENERATION_MAX_RETRIES} attempts: {last_error}"
+        f"{GENERATION_MAX_RETRIES} attempts: "
+        f"{last_error}"
     ) from last_error
 
 
-# ============================================================
+# ==========================================================================
 # Step 2 — Query rewrite
-# ============================================================
+# ==========================================================================
 
-REWRITE_PROMPT = """Rewrite the question below into a focused search query \
-for retrieving passages from a hepatology (liver disease) research paper.
+REWRITE_PROMPT = """
+Rewrite the question below into a focused search query for retrieving
+passages from a hepatology (liver disease) research paper.
 
-- Expand any medical abbreviations to their full form alongside the \
-  abbreviation (e.g. "HBV" -> "HBV hepatitis B virus").
-- Add closely related medical synonyms if they would help retrieval.
-- Keep it short: a search query, not a sentence or an answer.
-- Do not answer the question. Do not add commentary.
+Rules:
+- Expand medical abbreviations to their full form alongside the abbreviation.
+  Example: HBV -> HBV hepatitis B virus.
+- Add closely related medical synonyms if they improve retrieval.
+- Keep it short.
+- Return a search query, not an answer.
+- Do not add commentary.
+- Do not answer the question.
 
-Question: {question}
+Question:
+{question}
 
-Search query:"""
+Search query:
+"""
 
 
-def rewrite_query(client: Groq, question: str) -> str:
+def rewrite_query(
+    client: Groq,
+    question: str,
+) -> str:
 
     try:
 
-        response = client.chat.completions.create(
+        response = _create_completion(
+            client,
             model=MODEL_NAME,
             messages=[
                 {
@@ -206,32 +304,49 @@ def rewrite_query(client: Groq, question: str) -> str:
         )
 
         rewritten = (
-            response.choices[0].message.content or ""
+            response
+            .choices[0]
+            .message
+            .content
+            or ""
         ).strip()
 
-        return rewritten if rewritten else question
+        return (
+            rewritten
+            if rewritten
+            else question
+        )
 
     except Exception:
+
         return question
 
 
-# ============================================================
+# ==========================================================================
 # Step 3 — Retrieve
-# ============================================================
+# ==========================================================================
 
 def retrieve_chunks(
     query: str,
     top_k: int = RETRIEVAL_TOP_K,
 ) -> list[dict]:
 
-    semantic_results = semantic_search(query)
+    semantic_results = (
+        semantic_search(query)
+    )
 
-    bm25_results = bm25_search(query)
+    bm25_results = (
+        bm25_search(query)
+    )
 
     fused = reciprocal_rank_fusion(
         semantic_results,
         bm25_results,
     )
+
+    if not fused:
+
+        return []
 
     reranked = rerank_results(
         query,
@@ -249,7 +364,10 @@ def build_chunk_context(
 
     for c in chunks:
 
-        meta = c.get("metadata", {})
+        meta = (
+            c.get("metadata", {})
+            or {}
+        )
 
         section = meta.get(
             "section",
@@ -266,24 +384,28 @@ def build_chunk_context(
             f"{c['text']}"
         )
 
-    return "\n\n".join(blocks)
+    return "\n\n".join(
+        blocks
+    )
 
 
-# ============================================================
+# ==========================================================================
 # Neo4j
-# ============================================================
+# ==========================================================================
 
 def get_neo4j_driver():
-    """
-    Returns a connected Neo4j driver.
 
-    If Neo4j is unavailable, the application continues using
-    vector/BM25 retrieval only.
-    """
+    uri = os.getenv(
+        "NEO4J_URI"
+    )
 
-    uri = os.getenv("NEO4J_URI")
-    user = os.getenv("NEO4J_USER")
-    password = os.getenv("NEO4J_PASSWORD")
+    user = os.getenv(
+        "NEO4J_USER"
+    )
+
+    password = os.getenv(
+        "NEO4J_PASSWORD"
+    )
 
     if not all(
         [
@@ -292,31 +414,45 @@ def get_neo4j_driver():
             password,
         ]
     ):
-        return None
 
-    driver = GraphDatabase.driver(
-        uri,
-        auth=(user, password),
-    )
+        return None
 
     try:
 
+        driver = GraphDatabase.driver(
+            uri,
+            auth=(
+                user,
+                password,
+            ),
+        )
+
         driver.verify_connectivity()
+
+        return driver
 
     except Exception as exc:
 
         print(
-            f"[warn] Neo4j is configured but unreachable "
-            f"({exc}). Continuing WITHOUT graph facts — "
-            f"answers will only use the vector/BM25 index."
+            "[warn] Neo4j is configured "
+            f"but unreachable ({exc}). "
+            "Continuing WITHOUT graph facts."
         )
 
-        driver.close()
+        try:
+
+            driver.close()
+
+        except Exception:
+
+            pass
 
         return None
 
-    return driver
 
+# ==========================================================================
+# Graph helpers
+# ==========================================================================
 
 def _dedupe_graph_facts(
     facts: list[dict],
@@ -325,21 +461,25 @@ def _dedupe_graph_facts(
     seen = set()
     deduped = []
 
-    for f in facts:
+    for fact in facts:
 
         key = (
-            f.get("source"),
-            f.get("relation"),
-            f.get("target"),
-            f.get("section"),
-            f.get("page"),
+            fact.get("source"),
+            fact.get("relation"),
+            fact.get("target"),
+            fact.get("section"),
+            fact.get("page"),
         )
 
         if key in seen:
+
             continue
 
         seen.add(key)
-        deduped.append(f)
+
+        deduped.append(
+            fact
+        )
 
     return deduped
 
@@ -369,8 +509,8 @@ def _get_all_entity_names(
             )
 
             _all_entity_names = [
-                r["name"]
-                for r in result
+                record["name"]
+                for record in result
             ]
 
     return _all_entity_names
@@ -381,15 +521,21 @@ def _find_mentioned_entities(
     all_names: list[str],
 ) -> list[str]:
 
-    question_lower = question.lower()
+    question_lower = (
+        question.lower()
+    )
 
     matched = []
 
     for name in all_names:
 
+        name_lower = (
+            name.lower()
+        )
+
         pattern = (
             r"\b"
-            + re.escape(name.lower())
+            + re.escape(name_lower)
             + r"\b"
         )
 
@@ -397,9 +543,113 @@ def _find_mentioned_entities(
             pattern,
             question_lower,
         ):
-            matched.append(name)
+
+            matched.append(
+                name
+            )
 
     return matched
+
+
+def _graph_fact_relevance(
+    fact: dict,
+    question: str,
+) -> int:
+    """
+    Lightweight deterministic relevance scoring.
+
+    This prevents generic graph facts from dominating the context.
+
+    Score:
+        +3 source entity mentioned
+        +3 target entity mentioned
+        +2 relation words overlap
+        +1 section contains useful terms
+    """
+
+    question_tokens = set(
+        re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            question.lower(),
+        )
+    )
+
+    source = str(
+        fact.get(
+            "source",
+            "",
+        )
+    ).lower()
+
+    target = str(
+        fact.get(
+            "target",
+            "",
+        )
+    ).lower()
+
+    relation = str(
+        fact.get(
+            "relation",
+            "",
+        )
+    ).lower()
+
+    section = str(
+        fact.get(
+            "section",
+            "",
+        )
+    ).lower()
+
+    score = 0
+
+    if source and source in question.lower():
+
+        score += 3
+
+    if target and target in question.lower():
+
+        score += 3
+
+    relation_tokens = set(
+        re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            relation,
+        )
+    )
+
+    overlap = (
+        question_tokens
+        & relation_tokens
+    )
+
+    if overlap:
+
+        score += 2
+
+    useful_section_words = {
+        "cause",
+        "causes",
+        "etiology",
+        "risk",
+        "cirrhosis",
+        "liver",
+        "disease",
+        "pathogenesis",
+    }
+
+    if (
+        question_tokens
+        & set(
+            section.split()
+        )
+        & useful_section_words
+    ):
+
+        score += 1
+
+    return score
 
 
 def retrieve_graph_facts(
@@ -409,6 +659,7 @@ def retrieve_graph_facts(
 ) -> list[dict]:
 
     if driver is None:
+
         return []
 
     database = os.getenv(
@@ -418,17 +669,22 @@ def retrieve_graph_facts(
 
     try:
 
-        all_names = _get_all_entity_names(
-            driver,
-            database,
+        all_names = (
+            _get_all_entity_names(
+                driver,
+                database,
+            )
         )
 
-        names = _find_mentioned_entities(
-            original_question,
-            all_names,
+        names = (
+            _find_mentioned_entities(
+                original_question,
+                all_names,
+            )
         )
 
         if not names:
+
             return []
 
         with driver.session(
@@ -446,10 +702,9 @@ def retrieve_graph_facts(
                     b.name AS target,
                     r.section AS section,
                     r.page_start AS page
-                LIMIT $limit
+                LIMIT 50
                 """,
                 names=names,
-                limit=limit,
             )
 
             facts = [
@@ -457,16 +712,58 @@ def retrieve_graph_facts(
                 for record in result
             ]
 
-            return _dedupe_graph_facts(
-                facts
+        facts = _dedupe_graph_facts(
+            facts
+        )
+
+        # --------------------------------------------------------------
+        # NEW:
+        # Rank graph facts by relevance instead of blindly taking
+        # the first N Neo4j relationships.
+        # --------------------------------------------------------------
+
+        scored = []
+
+        for fact in facts:
+
+            relevance = (
+                _graph_fact_relevance(
+                    fact,
+                    original_question,
+                )
             )
+
+            scored.append(
+                (
+                    relevance,
+                    fact,
+                )
+            )
+
+        scored.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        # Only keep genuinely relevant graph facts.
+        #
+        # A score of 0 means the graph relationship is not useful
+        # enough for the current question.
+        relevant = [
+            fact
+            for score, fact
+            in scored
+            if score > 0
+        ]
+
+        return relevant[:limit]
 
     except Exception as exc:
 
         print(
-            f"[warn] Neo4j query failed mid-session "
-            f"({exc}). Answering from vector/BM25 only "
-            f"for this question."
+            "[warn] Neo4j query failed "
+            f"mid-session ({exc}). "
+            "Answering from vector/BM25 only."
         )
 
         return []
@@ -477,30 +774,33 @@ def build_graph_context(
 ) -> str:
 
     if not facts:
+
         return ""
 
     lines = []
 
-    for f in facts:
+    for fact in facts:
 
         section = (
-            f.get("section")
+            fact.get("section")
             or "Unknown"
         )
 
         page = (
-            f.get("page")
+            fact.get("page")
             or "?"
         )
 
         lines.append(
             f"[Graph source: {section}, p.{page}] "
-            f"{f['source']} "
-            f"-[{f['relation']}]-> "
-            f"{f['target']}"
+            f"{fact['source']} "
+            f"-[{fact['relation']}]-> "
+            f"{fact['target']}"
         )
 
-    return "\n".join(lines)
+    return "\n".join(
+        lines
+    )
 
 
 def build_full_context(
@@ -510,8 +810,10 @@ def build_full_context(
 
     parts = []
 
-    chunk_context = build_chunk_context(
-        chunks
+    chunk_context = (
+        build_chunk_context(
+            chunks
+        )
     )
 
     if chunk_context:
@@ -521,8 +823,10 @@ def build_full_context(
             + chunk_context
         )
 
-    graph_context = build_graph_context(
-        graph_facts
+    graph_context = (
+        build_graph_context(
+            graph_facts
+        )
     )
 
     if graph_context:
@@ -539,23 +843,28 @@ def build_full_context(
     )
 
 
-# ============================================================
-# Step 4 — Scope check
-# ============================================================
+# ==========================================================================
+# Step 4 — Scope
+# ==========================================================================
 
-SCOPE_PROMPT = """You will be shown a QUESTION and EVIDENCE excerpts \
-retrieved for it from a hepatology (liver disease) research paper.
+SCOPE_PROMPT = """
+You will be shown a QUESTION and EVIDENCE excerpts retrieved from a
+hepatology/liver disease research paper.
 
-Think briefly about whether this question is a hepatology/liver-disease-
-related medical or scientific question, AND whether the evidence is at
-least topically related to it — not whether the evidence fully answers it,
-just whether it's plausibly on the same topic.
+Determine whether:
 
-Respond in exactly this format, two lines:
+1. The question is related to liver disease/hepatology.
+2. The retrieved evidence is at least topically related.
+
+The evidence does NOT need to fully answer the question.
+
+Respond in exactly two lines:
+
 Reasoning: <one short sentence>
 Verdict: YES or NO
 
-QUESTION: {question}
+QUESTION:
+{question}
 
 EVIDENCE:
 {context}
@@ -588,7 +897,11 @@ def classify_scope(
         )
 
         text = (
-            response.choices[0].message.content or ""
+            response
+            .choices[0]
+            .message
+            .content
+            or ""
         ).strip().upper()
 
         verdict_line = next(
@@ -600,9 +913,13 @@ def classify_scope(
             text,
         )
 
-        return "YES" in verdict_line
+        return (
+            "YES"
+            in verdict_line
+        )
 
     except Exception:
+
         return True
 
 
@@ -619,12 +936,15 @@ def is_in_scope(
     )
 
     if not retrieval_is_weak:
+
         return True
 
-    llm_says_in_scope = classify_scope(
-        client,
-        question,
-        context,
+    llm_says_in_scope = (
+        classify_scope(
+            client,
+            question,
+            context,
+        )
     )
 
     return not (
@@ -633,37 +953,62 @@ def is_in_scope(
     )
 
 
-# ============================================================
-# Step 5 — Draft answer
-# ============================================================
+# ==========================================================================
+# Step 5 — Draft
+# ==========================================================================
 
-DRAFT_PROMPT = """You are a hepatology research assistant answering questions \
-strictly from the material provided below. You have two kinds of evidence:
+DRAFT_PROMPT = """
+You are a hepatology research assistant answering questions strictly
+from the evidence provided below.
 
-1. DOCUMENT EXCERPTS — passages retrieved from a research paper, each tagged \
-with [Source: <section>, p.<page>].
-2. KNOWLEDGE GRAPH FACTS — entity relationships extracted from the same \
-paper, each tagged with [Graph source: <section>, p.<page>].
+There are two evidence types:
 
-Follow these rules exactly, in order:
+1. DOCUMENT EXCERPTS
+   Passages from the research paper.
 
-1. Read all the evidence below before answering.
-2. Only state something if it is directly supported by the evidence. Never \
-use outside/prior knowledge, even if you are confident it's correct.
-3. After every factual claim, add its citation in the EXACT format \
-[Source: <section>, p.<page>] or [Graph source: <section>, p.<page>] — \
-never drop the page number, never shorten "Graph source" to "Source", \
-and never omit either part.
-4. If the evidence answers the question only partially, answer only the \
-part that is supported, and explicitly say which part is not covered.
-5. If the evidence does not contain the answer at all, respond with EXACTLY \
-this sentence and nothing else: "{not_found}"
-6. Never fabricate a citation, a page number, a statistic, or a relationship \
-that is not literally present in the evidence below.
-7. Prefer combining both DOCUMENT EXCERPTS and KNOWLEDGE GRAPH FACTS when \
-both are relevant — they reinforce each other and come from the same paper.
-8. Be concise. Do not repeat the question back. Do not add disclaimers — \
-those are added separately.
+2. KNOWLEDGE GRAPH FACTS
+   Relationships extracted from the same research paper.
+
+Rules:
+
+1. Read all evidence before answering.
+
+2. Use ONLY information explicitly supported by the evidence.
+   Never use outside knowledge.
+
+3. Prefer DOCUMENT EXCERPTS when they directly answer the question.
+
+4. Use KNOWLEDGE GRAPH FACTS only when they directly support the claim.
+   Do NOT use a graph fact merely because an entity happens to appear
+   in the question.
+
+5. Every factual claim must have a citation.
+
+6. Document citation format:
+   [Source: <section>, p.<page>]
+
+7. Graph citation format:
+   [Graph source: <section>, p.<page>]
+
+8. Never fabricate citations.
+
+9. Do not cite INTRODUCTION or REFERENCES merely because they contain
+   an entity. Use them only if the actual relationship directly supports
+   the answer.
+
+10. If DOCUMENT EXCERPTS directly answer the question, prefer their
+    citations over weak/general graph citations.
+
+11. If the evidence only partially answers the question, answer only
+    the supported portion.
+
+12. If the evidence does not contain the answer, output EXACTLY:
+    "{not_found}"
+
+13. Be concise.
+
+14. Do not add medical disclaimers.
+    The application adds them separately.
 
 EVIDENCE:
 {context}
@@ -679,8 +1024,10 @@ def draft_answer(
     context: str,
 ) -> str:
 
-    system_prompt = DRAFT_PROMPT.format(
-        context=context
+    system_prompt = (
+        DRAFT_PROMPT.format(
+            context=context
+        )
     )
 
     return _create_completion_with_retry(
@@ -703,31 +1050,58 @@ def draft_answer(
     )
 
 
-# ============================================================
+# ==========================================================================
 # Step 6a — Verify
-# ============================================================
+# ==========================================================================
 
-VERIFY_PROMPT = """You are a strict fact-checker. Below is a QUESTION, the \
-EVIDENCE that was available, and a DRAFT ANSWER written from that evidence.
+VERIFY_PROMPT = """
+You are a strict fact-checker.
 
-Check the draft against the evidence, claim by claim:
+You are given:
+- QUESTION
+- EVIDENCE
+- DRAFT ANSWER
 
-- Every factual statement in the draft must be backed by something literally \
-present in the evidence.
-- Every citation must correctly reference a source that actually appears in \
-the evidence, and must attribute the right fact to the right source.
-- Every citation must be in the EXACT format [Source: <section>, p.<page>] \
-or [Graph source: <section>, p.<page>] — both the section AND the page \
-number are required every time.
+Check every claim.
 
-If the draft is fully supported, output it UNCHANGED, word for word.
+Rules:
 
-If any part of the draft is NOT supported, rewrite the draft to remove or \
-correct only that part, keeping everything else and all valid citations \
-intact. If removing the unsupported part leaves nothing left, output \
-exactly: "{not_found}"
+1. Every factual statement must be supported by the evidence.
 
-Output ONLY the final answer text.
+2. Every citation must point to evidence that actually supports
+   the specific claim.
+
+3. Prefer document citations when a document excerpt directly supports
+   the claim.
+
+4. Remove graph citations that are technically valid but do not
+   directly support the claim.
+
+5. A graph relationship should only remain if it materially supports
+   the factual statement.
+
+6. Every citation must use exactly:
+
+   [Source: <section>, p.<page>]
+
+   OR
+
+   [Graph source: <section>, p.<page>]
+
+7. Do not invent citations.
+
+8. Do not add outside knowledge.
+
+9. If the draft is fully supported, return it unchanged except for
+   removing weak/non-supporting graph citations if necessary.
+
+10. If unsupported material exists, remove or correct only that part.
+
+11. If nothing remains supported, output exactly:
+
+{not_found}
+
+Output ONLY the final answer.
 
 QUESTION:
 {question}
@@ -770,9 +1144,9 @@ def verify_answer(
     )
 
 
-# ============================================================
+# ==========================================================================
 # Citation validation
-# ============================================================
+# ==========================================================================
 
 def _extract_citations(
     text: str,
@@ -785,7 +1159,9 @@ def _extract_citations(
             page.strip(),
         )
         for kind, section, page
-        in CITATION_RE.findall(text)
+        in CITATION_RE.findall(
+            text
+        )
     ]
 
 
@@ -796,12 +1172,15 @@ def _valid_citation_keys(
 
     valid = set()
 
-    for c in chunks:
+    for chunk in chunks:
 
-        meta = c.get(
-            "metadata",
-            {},
-        ) or {}
+        meta = (
+            chunk.get(
+                "metadata",
+                {},
+            )
+            or {}
+        )
 
         section = str(
             meta.get(
@@ -825,15 +1204,15 @@ def _valid_citation_keys(
             )
         )
 
-    for f in graph_facts:
+    for fact in graph_facts:
 
         section = str(
-            f.get("section")
+            fact.get("section")
             or "Unknown"
         ).strip()
 
         page = str(
-            f.get("page")
+            fact.get("page")
             or "?"
         ).strip()
 
@@ -854,16 +1233,21 @@ def has_only_verifiable_citations(
     graph_facts: list[dict],
 ) -> bool:
 
-    citations = _extract_citations(
-        answer
+    citations = (
+        _extract_citations(
+            answer
+        )
     )
 
     if not citations:
+
         return True
 
-    valid_keys = _valid_citation_keys(
-        chunks,
-        graph_facts,
+    valid_keys = (
+        _valid_citation_keys(
+            chunks,
+            graph_facts,
+        )
     )
 
     return all(
@@ -872,25 +1256,111 @@ def has_only_verifiable_citations(
     )
 
 
-# ============================================================
-# Step 6b — Finalize
-# ============================================================
+# ==========================================================================
+# Confidence
+# ==========================================================================
+
+def _get_retrieval_confidence(
+    chunks: list[dict],
+) -> float:
+    """
+    Return a conservative retrieval confidence.
+
+    Jina reranker scores are useful for ranking but should NOT be treated
+    as calibrated probabilities.
+
+    We therefore use the top score only as a weak signal and combine it
+    with the number of high-quality retrieved results.
+
+    This prevents a good retrieval result from being incorrectly labeled
+    low-confidence simply because the raw Jina score is below 0.5.
+    """
+
+    if not chunks:
+
+        return 0.0
+
+    scores = []
+
+    for chunk in chunks:
+
+        score = chunk.get(
+            "reranker_score"
+        )
+
+        if score is None:
+
+            continue
+
+        try:
+
+            scores.append(
+                float(score)
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+    if not scores:
+
+        return 0.0
+
+    top_score = max(
+        scores
+    )
+
+    # Strong evidence:
+    #
+    # Jina scores above ~0.6 are treated as clearly useful.
+    if top_score >= 0.60:
+
+        return 1.0
+
+    # Moderate evidence:
+    #
+    # Scores in 0.40-0.60 can still be useful.
+    if top_score >= 0.40:
+
+        return 0.75
+
+    # Weak but potentially relevant.
+    if top_score >= 0.25:
+
+        return 0.50
+
+    return 0.0
+
 
 def finalize_answer(
     answer: str,
-    top_reranker_score: float,
+    chunks: list[dict],
 ) -> str:
+
+    confidence = (
+        _get_retrieval_confidence(
+            chunks
+        )
+    )
 
     confidence_note = ""
 
+    # IMPORTANT:
+    # Only show low confidence when there is genuinely weak evidence.
+    #
+    # This avoids using raw Jina scores as calibrated probabilities.
+
     if (
-        top_reranker_score
-        < LOW_CONFIDENCE_THRESHOLD
+        confidence < LOW_CONFIDENCE_THRESHOLD
+        and chunks
     ):
 
         confidence_note = (
             "\n\n⚠️ *Low confidence retrieval — "
-            "the closest match found wasn't a strong "
+            "the available evidence may not be a strong "
             "fit for this question.*"
         )
 
@@ -901,9 +1371,9 @@ def finalize_answer(
     )
 
 
-# ============================================================
+# ==========================================================================
 # Chain orchestration
-# ============================================================
+# ==========================================================================
 
 def answer_question(
     client: Groq,
@@ -919,15 +1389,15 @@ def answer_question(
             "(dosage, prescriptions, or diagnosis) — "
             "please talk to a doctor or pharmacist "
             "about that. I can share what the research "
-            "paper says about liver disease topics in "
-            "general, if that helps."
+            "paper says about liver disease topics "
+            "in general, if that helps."
         )
 
     t_start = time.time()
 
-    # --------------------------------------------------------
-    # Query rewrite
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # Step 1/6 — Query rewrite
+    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
@@ -941,9 +1411,14 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-    # --------------------------------------------------------
-    # Hybrid retrieval
-    # --------------------------------------------------------
+    print(
+        f"[DEBUG] Search query: "
+        f"{search_query}"
+    )
+
+    # ----------------------------------------------------------------------
+    # Step 2/6 — Hybrid retrieval
+    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
@@ -958,15 +1433,17 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-    # --------------------------------------------------------
-    # Graph retrieval
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # Step 3/6 — Graph retrieval
+    # ----------------------------------------------------------------------
 
     t0 = time.time()
 
-    graph_facts = retrieve_graph_facts(
-        driver,
-        query,
+    graph_facts = (
+        retrieve_graph_facts(
+            driver,
+            query,
+        )
     )
 
     print(
@@ -974,40 +1451,44 @@ def answer_question(
         f"{time.time() - t0:.2f}s"
     )
 
-    print("\n=== Graph facts ===")
+    print(
+        "\n=== Graph facts ==="
+    )
 
     if not graph_facts:
 
         print(
-            "(none retrieved — either no matching "
-            "entities, or Neo4j is unavailable "
-            "for this run)"
+            "(none retrieved)"
         )
 
     else:
 
-        for f in graph_facts:
+        for fact in graph_facts:
 
             section = (
-                f.get("section")
+                fact.get(
+                    "section"
+                )
                 or "Unknown"
             )
 
             page = (
-                f.get("page")
+                fact.get(
+                    "page"
+                )
                 or "?"
             )
 
             print(
-                f"{f['source']} "
-                f"-[{f['relation']}]-> "
-                f"{f['target']} "
+                f"{fact['source']} "
+                f"-[{fact['relation']}]-> "
+                f"{fact['target']} "
                 f"(section={section}, p.{page})"
             )
 
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
     # No evidence
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
 
     if not chunks and not graph_facts:
 
@@ -1016,25 +1497,72 @@ def answer_question(
             + DISCLAIMER
         )
 
+    # ----------------------------------------------------------------------
+    # Build context
+    # ----------------------------------------------------------------------
+
     context = build_full_context(
         chunks,
         graph_facts,
     )
 
+    # ----------------------------------------------------------------------
+    # Retrieval confidence
+    # ----------------------------------------------------------------------
+
+    retrieval_confidence = (
+        _get_retrieval_confidence(
+            chunks
+        )
+    )
+
+    print(
+        f"[DEBUG] Retrieval confidence: "
+        f"{retrieval_confidence:.2f}"
+    )
+
+    if chunks:
+
+        scores = [
+            c.get(
+                "reranker_score"
+            )
+            for c in chunks
+            if c.get(
+                "reranker_score"
+            ) is not None
+        ]
+
+        if scores:
+
+            print(
+                f"[DEBUG] Jina scores: "
+                f"{[round(float(s), 4) for s in scores]}"
+            )
+
+    # ----------------------------------------------------------------------
+    # Step 4/6 — Scope
+    # ----------------------------------------------------------------------
+
+    t0 = time.time()
+
+    # IMPORTANT:
+    #
+    # Scope should use the raw top reranker score only for detecting
+    # extremely weak retrieval.
+    #
+    # It should NOT generate a low-confidence warning itself.
+
     top_reranker_score = (
-        chunks[0].get(
-            "reranker_score",
-            1.0,
+        float(
+            chunks[0].get(
+                "reranker_score",
+                1.0,
+            )
         )
         if chunks
         else 0.0
     )
-
-    # --------------------------------------------------------
-    # Scope
-    # --------------------------------------------------------
-
-    t0 = time.time()
 
     in_scope = is_in_scope(
         client,
@@ -1055,9 +1583,9 @@ def answer_question(
             + DISCLAIMER
         )
 
-    # --------------------------------------------------------
-    # Draft + verification
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # Step 5/6 — Draft + verification
+    # ----------------------------------------------------------------------
 
     try:
 
@@ -1091,7 +1619,8 @@ def answer_question(
     except GenerationError as exc:
 
         print(
-            f"[DEBUG] GenerationError: {exc}"
+            f"[DEBUG] GenerationError: "
+            f"{exc}"
         )
 
         return (
@@ -1099,9 +1628,9 @@ def answer_question(
             + DISCLAIMER
         )
 
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Citation validation
-    # --------------------------------------------------------
+    # ----------------------------------------------------------------------
 
     if not has_only_verifiable_citations(
         verified,
@@ -1122,12 +1651,12 @@ def answer_question(
         )
 
         print(
-            f"--- valid keys ---\n"
+            "--- valid keys ---\n"
             f"{_valid_citation_keys(chunks, graph_facts)}"
         )
 
         print(
-            f"--- citations found ---\n"
+            "--- citations found ---\n"
             f"{_extract_citations(verified)}"
         )
 
@@ -1136,24 +1665,31 @@ def answer_question(
             + DISCLAIMER
         )
 
+    # ----------------------------------------------------------------------
+    # Final cleanup
+    # ----------------------------------------------------------------------
+
     print(
-        f"[TIMING] TOTAL (answer_question): "
+        f"[TIMING] TOTAL "
+        f"(answer_question): "
         f"{time.time() - t_start:.2f}s"
     )
 
     return finalize_answer(
         verified,
-        top_reranker_score,
+        chunks,
     )
 
 
-# ============================================================
+# ==========================================================================
 # Main
-# ============================================================
+# ==========================================================================
 
 def main():
 
-    t_process_start = time.time()
+    t_process_start = (
+        time.time()
+    )
 
     load_dotenv()
 
@@ -1181,14 +1717,15 @@ def main():
         api_key=api_key
     )
 
-    driver = get_neo4j_driver()
+    driver = (
+        get_neo4j_driver()
+    )
 
     if driver is None:
 
         print(
-            "(Neo4j credentials not found "
-            "or Neo4j unavailable — answering "
-            "from vector/BM25 only.)\n"
+            "(Neo4j unavailable — "
+            "answering from vector/BM25 only.)\n"
         )
 
     try:
@@ -1202,6 +1739,7 @@ def main():
     finally:
 
         if driver is not None:
+
             driver.close()
 
     print(
@@ -1228,4 +1766,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
